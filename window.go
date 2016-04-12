@@ -7,8 +7,6 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-const TimeFormat = time.RFC3339Nano
-
 type Window struct {
 	Start  time.Time
 	End    time.Time

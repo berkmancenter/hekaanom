@@ -1,20 +1,16 @@
-package window
+package hekaanom
 
 import (
 	"errors"
-	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/mozilla-services/heka/pipeline"
-
-	"github.com/berkmancenter/hekaanom"
 )
 
 type Windower interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan hekaanom.Metric, out chan hekaanom.Window) error
+	Connect(in chan Metric, out chan Window) error
 }
 
 type WindowConfig struct {
@@ -22,7 +18,7 @@ type WindowConfig struct {
 }
 
 type WindowFilter struct {
-	windows map[string]*hekaanom.Window
+	windows map[string]*Window
 	*WindowConfig
 }
 
@@ -35,20 +31,19 @@ func (f *WindowFilter) Init(config interface{}) error {
 	if f.WindowConfig.WindowWidth <= 0 {
 		return errors.New("'window_width' setting must be greater than zero.")
 	}
-	f.windows = map[string]*hekaanom.Window{}
+	f.windows = map[string]*Window{}
 	return nil
 }
 
-func (f *WindowFilter) Connect(in chan hekaanom.Metric, out chan hekaanom.Window) error {
+func (f *WindowFilter) Connect(in chan Metric, out chan Window) error {
 	for metric := range in {
 		window, ok := f.windows[metric.Series]
 		if !ok {
-			window = &hekaanom.Window{Series: metric.Series}
+			window = &Window{
+				Start:  metric.Timestamp,
+				Series: metric.Series,
+			}
 			f.windows[metric.Series] = window
-		}
-
-		if window.Start.IsZero() {
-			window.Start = metric.Timestamp
 		}
 
 		windowAge := metric.Timestamp.Sub(window.Start)
@@ -63,8 +58,8 @@ func (f *WindowFilter) Connect(in chan hekaanom.Metric, out chan hekaanom.Window
 	return nil
 }
 
-func (f *WindowFilter) flushWindow(window *hekaanom.Window, out chan hekaanom.Window) error {
-	out <- window
-	*window = hekaanom.Window{Series: window.Series}
+func (f *WindowFilter) flushWindow(window *Window, out chan Window) error {
+	out <- *window
+	*window = Window{Series: window.Series}
 	return nil
 }

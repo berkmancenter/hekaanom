@@ -1,5 +1,4 @@
-// This package implements a generic anomaly detection filter interface.
-package filter
+package hekaanom
 
 import (
 	"errors"
@@ -7,14 +6,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/berkmancenter/hekaanom"
-	"github.com/berkmancenter/hekaanom/detect"
-	"github.com/berkmancenter/hekaanom/gather"
-	"github.com/berkmancenter/hekaanom/window"
-
 	"github.com/mozilla-services/heka/message"
 	"github.com/mozilla-services/heka/pipeline"
 )
+
+const TimeFormat = time.RFC3339Nano
 
 var (
 	DefaultMessageVal    = 1.0
@@ -25,19 +21,19 @@ func init() {
 	pipeline.RegisterPlugin("AnomalyFilter",
 		func() interface{} {
 			return &AnomalyFilter{
-				windower: new(window.WindowFilter),
-				detector: new(detector.DetectFilter),
-				gatherer: new(gather.GatherFilter),
+				windower: new(WindowFilter),
+				detector: new(DetectFilter),
+				gatherer: new(GatherFilter),
 			}
 		})
 }
 
 type AnomalyConfig struct {
-	SeriesField  string               `toml:"series_field"`
-	ValueField   string               `toml:"value_field"`
-	WindowConfig *window.WindowConfig `toml:"window"`
-	DetectConfig *detect.DetectConfig `toml:"detect"`
-	GatherConfig *gather.GatherConfig `toml:"gather"`
+	SeriesField  string        `toml:"series_field"`
+	ValueField   string        `toml:"value_field"`
+	WindowConfig *WindowConfig `toml:"window"`
+	DetectConfig *DetectConfig `toml:"detect"`
+	GatherConfig *GatherConfig `toml:"gather"`
 }
 
 type AnomalyFilter struct {
@@ -45,23 +41,23 @@ type AnomalyFilter struct {
 	helper pipeline.PluginHelper
 	*anomPipeline
 	*AnomalyConfig
-	windower window.Windower
-	detector detect.Detector
-	gatherer gather.Gatherer
+	windower Windower
+	detector Detector
+	gatherer Gatherer
 }
 
 type anomPipeline struct {
-	metrics chan hekaanom.Metric
-	windows chan hekaanom.Window
-	rulings chan hekaanom.Ruling
-	spans   chan hekaanom.Span
+	metrics chan Metric
+	windows chan Window
+	rulings chan Ruling
+	spans   chan AnomalousSpan
 }
 
 func (f *AnomalyFilter) ConfigStruct() interface{} {
 	return &AnomalyConfig{
-		WindowConfig: f.windower.ConfigStruct(),
-		DetectConfig: f.detector.ConfigStruct(),
-		GatherConfig: f.gatherer.ConfigStruct(),
+		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
+		DetectConfig: f.detector.ConfigStruct().(*DetectConfig),
+		GatherConfig: f.gatherer.ConfigStruct().(*GatherConfig),
 	}
 }
 
@@ -84,11 +80,11 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelper) error {
 	f.runner = fr
 	f.helper = h
-	f.anomPipeline = anomPipeline{
-		metrics: make(chan hekaanom.Metric, 100),
-		windows: make(chan hekaanom.Window, 100),
-		rulings: make(chan hekaanom.Ruling, 100),
-		spans:   make(chan hekaanom.Span, 100),
+	f.anomPipeline = &anomPipeline{
+		metrics: make(chan Metric, 100),
+		windows: make(chan Window, 100),
+		rulings: make(chan Ruling, 100),
+		spans:   make(chan AnomalousSpan, 100),
 	}
 	// TODO err channel
 	go f.windower.Connect(f.anomPipeline.metrics, f.anomPipeline.windows)
@@ -101,11 +97,12 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	metric := f.metricFromMessage(pack.Message)
 	f.anomPipeline.metrics <- metric
+	return nil
 }
 
 func (f *AnomalyFilter) TimerEvent() error {
 	now := time.Now()
-	f.gatherer.FlushExpiredSpans(now)
+	f.gatherer.FlushExpiredSpans(now, f.anomPipeline.spans)
 	return nil
 }
 
@@ -125,6 +122,7 @@ func (f *AnomalyFilter) publishSpans() error {
 		msg := newPack.Message
 		msg.SetType("anom.span")
 		if err = span.FillMessage(msg); err != nil {
+			fmt.Println(err)
 			return err
 		}
 		f.runner.Inject(newPack)
@@ -132,17 +130,8 @@ func (f *AnomalyFilter) publishSpans() error {
 	return nil
 }
 
-func algoIsKnown(algo string) bool {
-	for _, v := range Algos {
-		if v == algo {
-			return true
-		}
-	}
-	return false
-}
-
-func (f *AnomalyFilter) metricFromMessage(msg *message.Message) hekaanom.Metric {
-	return hekaanom.Metric{
+func (f *AnomalyFilter) metricFromMessage(msg *message.Message) Metric {
+	return Metric{
 		time.Unix(0, msg.GetTimestamp()),
 		f.getMessageSeries(msg),
 		f.getMessageValue(msg),

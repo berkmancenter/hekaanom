@@ -1,9 +1,8 @@
-package detect
+package hekaanom
 
 import (
 	"errors"
 
-	"github.com/berkmancenter/hekaanom"
 	"github.com/berkmancenter/rpca"
 
 	"github.com/mozilla-services/heka/pipeline"
@@ -50,13 +49,12 @@ func (d *RPCADetector) Init(config interface{}) error {
 	return nil
 }
 
-func (d *RPCADetector) Detect(win hekaanom.Window) hekaanom.Ruling {
-	ruling := hekaanom.Ruling{Window: win}
+func (d *RPCADetector) Detect(win Window) Ruling {
 
 	d.series[win.Series] = append(d.series[win.Series], win.Value)
 
 	if len(d.series[win.Series]) < d.minorFreq {
-		return ruling
+		return Ruling{Window: win}
 	}
 
 	if len(d.series[win.Series]) > d.minorFreq {
@@ -68,5 +66,5 @@ func (d *RPCADetector) Detect(win hekaanom.Window) hekaanom.Ruling {
 	anomalous, anomalousness := anoms.Positions[i], anoms.Values[i]
 	normed := anoms.NormedValues[i]
 
-	return hekaanom.Ruling{win, anomalous, anomalousness, normed}
+	return Ruling{win, anomalous, anomalousness, normed}
 }

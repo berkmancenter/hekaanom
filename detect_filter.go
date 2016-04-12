@@ -1,14 +1,9 @@
-package detect
+package hekaanom
 
 import (
 	"errors"
-	"fmt"
-	"strconv"
-	"time"
 
 	"github.com/mozilla-services/heka/pipeline"
-
-	"github.com/berkmancenter/hekaanom"
 )
 
 var Algos = []string{"RPCA"}
@@ -16,7 +11,7 @@ var Algos = []string{"RPCA"}
 type Detector interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan hekaanom.Window, out chan hekaanom.Ruling) error
+	Connect(in chan Window, out chan Ruling) error
 }
 
 type DetectConfig struct {
@@ -26,7 +21,7 @@ type DetectConfig struct {
 
 type DetectAlgo interface {
 	Init(config interface{}) error
-	Detect(win hekaanom.Window) hekaanom.Ruling
+	Detect(win Window) Ruling
 }
 
 type DetectFilter struct {
@@ -54,12 +49,12 @@ func (f *DetectFilter) Init(config interface{}) error {
 	return f.Detector.Init(f.DetectConfig.DetectorConfig)
 }
 
-func (f *DetectFilter) Connect(in chan window.Window, out chan hekaanom.Ruling) error {
+func (f *DetectFilter) Connect(in chan Window, out chan Ruling) error {
 	for window := range in {
-		ruling := f.detector.Detect(window)
+		ruling := f.Detector.Detect(window)
 		out <- ruling
-		return nil
 	}
+	return nil
 }
 
 func algoIsKnown(algo string) bool {

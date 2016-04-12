@@ -10,15 +10,15 @@ type Ruling struct {
 }
 
 func (r Ruling) fillMessage(m *message.Message) error {
-	anomalous, err := message.NewField("anomalous", r.anomalous, "")
+	anomalous, err := message.NewField("anomalous", r.Anomalous, "")
 	if err != nil {
 		return err
 	}
-	anomalousness, err := message.NewField("anomalousness", r.anomalousness, "count")
+	anomalousness, err := message.NewField("anomalousness", r.Anomalousness, "count")
 	if err != nil {
 		return err
 	}
-	normed, err := message.NewField("normed", r.normed, "count")
+	normed, err := message.NewField("normed", r.Normed, "count")
 	if err != nil {
 		return err
 	}

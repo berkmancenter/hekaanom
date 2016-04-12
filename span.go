@@ -8,8 +8,6 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-const TimeFormat = time.RFC3339Nano
-
 type AnomalousSpan struct {
 	Start       time.Time
 	End         time.Time
@@ -46,18 +44,13 @@ func (s AnomalousSpan) FillMessage(m *message.Message) error {
 	if err != nil {
 		return errors.New("Could not create 'values' field")
 	}
-	duration := s.End.Sub(s.Start)
-	durField, err := message.NewField("span_duration", duration.String(), "duration")
+	durField, err := message.NewField("span_duration", s.Duration.String(), "duration")
 	if err != nil {
 		return errors.New("Could not create 'duration' field")
 	}
-	product := float64(duration/time.Second) * s.Aggregation
-	if product == 0 {
-		product = float64(s.Interval) * s.Aggregation
-	}
-	prodField, err := message.NewField("product", product, "count")
+	score, err := message.NewField("score", s.Score, "count")
 	if err != nil {
-		return errors.New("Could not create 'product' field")
+		return errors.New("Could not create 'score' field")
 	}
 	m.SetTimestamp(s.End.UnixNano())
 	m.AddField(start)
@@ -66,6 +59,6 @@ func (s AnomalousSpan) FillMessage(m *message.Message) error {
 	m.AddField(agg)
 	m.AddField(valuesField)
 	m.AddField(durField)
-	m.AddField(prodField)
+	m.AddField(score)
 	return nil
 }
