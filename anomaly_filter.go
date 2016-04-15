@@ -24,6 +24,7 @@ func init() {
 				windower: new(WindowFilter),
 				detector: new(DetectFilter),
 				gatherer: new(GatherFilter),
+				binner:   new(BinFilter),
 			}
 		})
 }
@@ -34,6 +35,7 @@ type AnomalyConfig struct {
 	WindowConfig *WindowConfig `toml:"window"`
 	DetectConfig *DetectConfig `toml:"detect"`
 	GatherConfig *GatherConfig `toml:"gather"`
+	BinConfig    *BinConfig    `toml:"bin"`
 }
 
 type AnomalyFilter struct {
@@ -44,6 +46,7 @@ type AnomalyFilter struct {
 	windower Windower
 	detector Detector
 	gatherer Gatherer
+	binner   Binner
 }
 
 type anomPipeline struct {
@@ -51,6 +54,7 @@ type anomPipeline struct {
 	windows chan Window
 	rulings chan Ruling
 	spans   chan AnomalousSpan
+	bins    chan Bin
 }
 
 func (f *AnomalyFilter) ConfigStruct() interface{} {
@@ -58,6 +62,7 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
 		DetectConfig: f.detector.ConfigStruct().(*DetectConfig),
 		GatherConfig: f.gatherer.ConfigStruct().(*GatherConfig),
+		BinConfig:    f.binner.ConfigStruct().(*BinConfig),
 	}
 }
 
@@ -73,6 +78,9 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 	if err := f.gatherer.Init(f.AnomalyConfig.GatherConfig); err != nil {
 		return err
 	}
+	if err := f.binner.Init(f.AnomalyConfig.BinConfig); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -85,12 +93,17 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 		windows: make(chan Window, 100),
 		rulings: make(chan Ruling, 100),
 		spans:   make(chan AnomalousSpan, 100),
+		bins:    make(chan Bin, 100),
 	}
 	// TODO err channel
 	go f.windower.Connect(f.anomPipeline.metrics, f.anomPipeline.windows)
 	go f.detector.Connect(f.anomPipeline.windows, f.anomPipeline.rulings)
 	go f.gatherer.Connect(f.anomPipeline.rulings, f.anomPipeline.spans)
-	go f.publishSpans()
+	toBin, toPublish := make(chan AnomalousSpan, 100), make(chan AnomalousSpan, 100)
+	go spanBroadcast(f.anomPipeline.spans, []chan AnomalousSpan{toBin, toPublish})
+	go f.binner.Connect(toBin, f.anomPipeline.bins)
+	go f.publishSpans(toPublish)
+	go f.publishBins(f.anomPipeline.bins)
 	return nil
 }
 
@@ -113,8 +126,8 @@ func (f *AnomalyFilter) CleanUp() {
 	close(f.anomPipeline.spans)
 }
 
-func (f *AnomalyFilter) publishSpans() error {
-	for span := range f.anomPipeline.spans {
+func (f *AnomalyFilter) publishSpans(in chan AnomalousSpan) error {
+	for span := range in {
 		newPack, err := f.helper.PipelinePack(0)
 		if err != nil {
 			return errors.New("Could not create new span message")
@@ -122,6 +135,23 @@ func (f *AnomalyFilter) publishSpans() error {
 		msg := newPack.Message
 		msg.SetType("anom.span")
 		if err = span.FillMessage(msg); err != nil {
+			fmt.Println(err)
+			return err
+		}
+		f.runner.Inject(newPack)
+	}
+	return nil
+}
+
+func (f *AnomalyFilter) publishBins(in chan Bin) error {
+	for bin := range in {
+		newPack, err := f.helper.PipelinePack(0)
+		if err != nil {
+			return errors.New("Could not create new span message")
+		}
+		msg := newPack.Message
+		msg.SetType("anom.bin")
+		if err = bin.FillMessage(msg); err != nil {
 			fmt.Println(err)
 			return err
 		}
@@ -147,6 +177,14 @@ func (f *AnomalyFilter) getMessageSeries(msg *message.Message) string {
 		return DefaultMessageSeries
 	}
 	return value.(string)
+}
+
+func spanBroadcast(in chan AnomalousSpan, out []chan AnomalousSpan) {
+	for span := range in {
+		for _, outChan := range out {
+			outChan <- span
+		}
+	}
 }
 
 func (f *AnomalyFilter) getMessageValue(msg *message.Message) float64 {

@@ -10,7 +10,7 @@ import (
 type Binner interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in <-chan AnomalousSpan, out chan<- Bin, done <-chan struct{})
+	Connect(in <-chan AnomalousSpan, out chan<- Bin)
 }
 
 type BinConfig struct {
@@ -35,31 +35,23 @@ func (f *BinFilter) Init(config interface{}) error {
 	return nil
 }
 
-func (f *BinFilter) Connect(in <-chan AnomalousSpan, out chan<- Bin, done <-chan struct{}) {
+func (f *BinFilter) Connect(in <-chan AnomalousSpan, out chan<- Bin) {
 	binWidth := time.Duration(f.BinConfig.BinWidth) * time.Second
-	go func() {
-		defer close(out)
-		for span := range in {
-			for _, binTime := range f.spanToBins(span) {
-				bin, ok := f.bins[binTime]
-				if !ok {
-					bin = &Bin{
-						Start: binTime,
-						End:   binTime.Add(binWidth),
-					}
-					f.bins[binTime] = bin
+	for span := range in {
+		for _, binTime := range f.spanToBins(span) {
+			bin, ok := f.bins[binTime]
+			if !ok {
+				bin = &Bin{
+					Start: binTime,
+					End:   binTime.Add(binWidth),
 				}
-				bin.Count += 1
-				bin.Entries = append(bin.Entries, span.Series)
-				select {
-				case out <- *bin:
-				case <-done:
-					println("bin")
-					return
-				}
+				f.bins[binTime] = bin
 			}
+			bin.Count += 1
+			bin.Entries = append(bin.Entries, span.Series)
+			out <- *bin
 		}
-	}()
+	}
 }
 
 func (f *BinFilter) spanToBins(span AnomalousSpan) []time.Time {
