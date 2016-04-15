@@ -10,7 +10,7 @@ import (
 type Windower interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan Metric, out chan Window) error
+	Connect(in <-chan Metric, out chan<- Window, done <-chan struct{})
 }
 
 type WindowConfig struct {
@@ -35,31 +35,33 @@ func (f *WindowFilter) Init(config interface{}) error {
 	return nil
 }
 
-func (f *WindowFilter) Connect(in chan Metric, out chan Window) error {
-	for metric := range in {
-		window, ok := f.windows[metric.Series]
-		if !ok {
-			window = &Window{
-				Start:  metric.Timestamp,
-				Series: metric.Series,
+func (f *WindowFilter) Connect(in <-chan Metric, out chan<- Window, done <-chan struct{}) {
+	go func() {
+		defer close(out)
+		for metric := range in {
+			window, ok := f.windows[metric.Series]
+			if !ok {
+				window = &Window{
+					Start:  metric.Timestamp,
+					Series: metric.Series,
+				}
+				f.windows[metric.Series] = window
 			}
-			f.windows[metric.Series] = window
+
+			windowAge := metric.Timestamp.Sub(window.Start)
+			if int64(windowAge/time.Second) >= f.WindowConfig.WindowWidth {
+				select {
+				case out <- *window:
+				case <-done:
+					println("window")
+					return
+				}
+				*window = Window{Series: window.Series}
+				window.Start = metric.Timestamp
+			}
+
+			window.Value += metric.Value
+			window.End = metric.Timestamp
 		}
-
-		windowAge := metric.Timestamp.Sub(window.Start)
-		if int64(windowAge/time.Second) >= f.WindowConfig.WindowWidth {
-			f.flushWindow(window, out)
-			window.Start = metric.Timestamp
-		}
-
-		window.Value += metric.Value
-		window.End = metric.Timestamp
-	}
-	return nil
-}
-
-func (f *WindowFilter) flushWindow(window *Window, out chan Window) error {
-	out <- *window
-	*window = Window{Series: window.Series}
-	return nil
+	}()
 }
