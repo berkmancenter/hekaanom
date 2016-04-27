@@ -91,7 +91,7 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 
 	spanChans := broadcastSpan(f.spans, 2)
 
-	bins := f.binner.Connect(f.spans)
+	bins := f.binner.Connect(spanChans[0])
 
 	f.publishRulings(rulingChans[1])
 	f.publishSpans(spanChans[1])
