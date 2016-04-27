@@ -1,7 +1,6 @@
 package hekaanom
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -24,6 +23,7 @@ func init() {
 				windower: new(WindowFilter),
 				detector: new(DetectFilter),
 				gatherer: new(GatherFilter),
+				binner:   new(BinFilter),
 			}
 		})
 }
@@ -34,23 +34,19 @@ type AnomalyConfig struct {
 	WindowConfig *WindowConfig `toml:"window"`
 	DetectConfig *DetectConfig `toml:"detect"`
 	GatherConfig *GatherConfig `toml:"gather"`
+	BinConfig    *BinConfig    `toml:"bin"`
 }
 
 type AnomalyFilter struct {
 	runner pipeline.FilterRunner
 	helper pipeline.PluginHelper
-	*anomPipeline
 	*AnomalyConfig
 	windower Windower
 	detector Detector
 	gatherer Gatherer
-}
-
-type anomPipeline struct {
-	metrics chan Metric
-	windows chan Window
-	rulings chan Ruling
-	spans   chan AnomalousSpan
+	binner   Binner
+	metrics  chan Metric
+	spans    chan Span
 }
 
 func (f *AnomalyFilter) ConfigStruct() interface{} {
@@ -58,6 +54,7 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
 		DetectConfig: f.detector.ConfigStruct().(*DetectConfig),
 		GatherConfig: f.gatherer.ConfigStruct().(*GatherConfig),
+		BinConfig:    f.binner.ConfigStruct().(*BinConfig),
 	}
 }
 
@@ -73,6 +70,9 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 	if err := f.gatherer.Init(f.AnomalyConfig.GatherConfig); err != nil {
 		return err
 	}
+	if err := f.binner.Init(f.AnomalyConfig.BinConfig); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -80,53 +80,100 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelper) error {
 	f.runner = fr
 	f.helper = h
-	f.anomPipeline = &anomPipeline{
-		metrics: make(chan Metric, 100),
-		windows: make(chan Window, 100),
-		rulings: make(chan Ruling, 100),
-		spans:   make(chan AnomalousSpan, 100),
-	}
-	// TODO err channel
-	go f.windower.Connect(f.anomPipeline.metrics, f.anomPipeline.windows)
-	go f.detector.Connect(f.anomPipeline.windows, f.anomPipeline.rulings)
-	go f.gatherer.Connect(f.anomPipeline.rulings, f.anomPipeline.spans)
-	go f.publishSpans()
+	f.metrics = make(chan Metric)
+	f.spans = make(chan Span)
+
+	windows := f.windower.Connect(f.metrics)
+	rulings := f.detector.Connect(windows)
+
+	rulingChans := broadcastRuling(rulings, 2)
+	f.spans = f.gatherer.Connect(rulings)
+
+	spanChans := broadcastSpan(f.spans, 2)
+
+	bins := f.binner.Connect(f.spans)
+
+	f.publishRulings(rulingChans[1])
+	f.publishSpans(spanChans[1])
+	f.publishBins(bins)
+
 	return nil
 }
 
 func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	metric := f.metricFromMessage(pack.Message)
-	f.anomPipeline.metrics <- metric
+	f.metrics <- metric
 	return nil
 }
 
 func (f *AnomalyFilter) TimerEvent() error {
+	f.detector.PrintQs()
 	now := time.Now()
-	f.gatherer.FlushExpiredSpans(now, f.anomPipeline.spans)
+	f.gatherer.FlushExpiredSpans(now, f.spans)
 	return nil
 }
 
 func (f *AnomalyFilter) CleanUp() {
-	close(f.anomPipeline.metrics)
-	close(f.anomPipeline.windows)
-	close(f.anomPipeline.rulings)
-	close(f.anomPipeline.spans)
+	close(f.metrics)
 }
 
-func (f *AnomalyFilter) publishSpans() error {
-	for span := range f.anomPipeline.spans {
-		newPack, err := f.helper.PipelinePack(0)
-		if err != nil {
-			return errors.New("Could not create new span message")
+func (f *AnomalyFilter) publishSpans(in chan Span) error {
+	go func() {
+		for span := range in {
+			newPack, err := f.helper.PipelinePack(0)
+			if err != nil {
+				fmt.Println("Could not create new span message")
+				continue
+			}
+			msg := newPack.Message
+			msg.SetType("anom.span")
+			if err = span.FillMessage(msg); err != nil {
+				fmt.Println(err)
+				continue
+			}
+			f.runner.Inject(newPack)
 		}
-		msg := newPack.Message
-		msg.SetType("anom.span")
-		if err = span.FillMessage(msg); err != nil {
-			fmt.Println(err)
-			return err
+	}()
+	return nil
+}
+
+func (f *AnomalyFilter) publishBins(in chan Bin) error {
+	go func() {
+		for bin := range in {
+			newPack, err := f.helper.PipelinePack(0)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			msg := newPack.Message
+			msg.SetType("anom.bin")
+			if err = bin.FillMessage(msg); err != nil {
+				fmt.Println(err)
+				continue
+			}
+			f.runner.Inject(newPack)
 		}
-		f.runner.Inject(newPack)
-	}
+	}()
+	return nil
+}
+
+func (f *AnomalyFilter) publishRulings(in chan Ruling) error {
+	go func() {
+		for ruling := range in {
+			newPack, err := f.helper.PipelinePack(0)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			msg := newPack.Message
+			msg.SetType("anom.ruling")
+			if err = ruling.FillMessage(msg); err != nil {
+				fmt.Println(err)
+				continue
+			}
+			f.runner.Inject(newPack)
+		}
+	}()
 	return nil
 }
 
@@ -147,6 +194,46 @@ func (f *AnomalyFilter) getMessageSeries(msg *message.Message) string {
 		return DefaultMessageSeries
 	}
 	return value.(string)
+}
+
+func broadcastSpan(in chan Span, numOut int) []chan Span {
+	out := make([]chan Span, numOut)
+	for i := 0; i < numOut; i++ {
+		out[i] = make(chan Span)
+	}
+	go func() {
+		defer func() {
+			for _, ch := range out {
+				close(ch)
+			}
+		}()
+		for msg := range in {
+			for _, outChan := range out {
+				outChan <- msg
+			}
+		}
+	}()
+	return out
+}
+
+func broadcastRuling(in chan Ruling, numOut int) []chan Ruling {
+	out := make([]chan Ruling, numOut)
+	for i := 0; i < numOut; i++ {
+		out[i] = make(chan Ruling)
+	}
+	go func() {
+		defer func() {
+			for _, ch := range out {
+				close(ch)
+			}
+		}()
+		for msg := range in {
+			for _, ch := range out {
+				ch <- msg
+			}
+		}
+	}()
+	return out
 }
 
 func (f *AnomalyFilter) getMessageValue(msg *message.Message) float64 {

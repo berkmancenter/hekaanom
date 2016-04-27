@@ -8,7 +8,7 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-type AnomalousSpan struct {
+type Span struct {
 	Start       time.Time
 	End         time.Time
 	Series      string
@@ -19,7 +19,7 @@ type AnomalousSpan struct {
 	Score       float64
 }
 
-func (s AnomalousSpan) FillMessage(m *message.Message) error {
+func (s Span) FillMessage(m *message.Message) error {
 	start, err := message.NewField("span_start", s.Start.Format(TimeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'span_start' field")

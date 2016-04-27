@@ -2,6 +2,7 @@ package hekaanom
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"time"
 
@@ -25,8 +26,8 @@ var (
 type Gatherer interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan Ruling, out chan AnomalousSpan) error
-	FlushExpiredSpans(now time.Time, out chan AnomalousSpan)
+	Connect(in chan Ruling) chan Span
+	FlushExpiredSpans(now time.Time, out chan Span)
 }
 
 type GatherConfig struct {
@@ -39,7 +40,7 @@ type GatherConfig struct {
 type GatherFilter struct {
 	*GatherConfig
 	aggregator func(stats.Float64Data) (float64, error)
-	spans      map[string]*AnomalousSpan
+	spans      map[string]*Span
 }
 
 func (f *GatherFilter) ConfigStruct() interface{} {
@@ -60,43 +61,51 @@ func (f *GatherFilter) Init(config interface{}) error {
 	}
 
 	f.aggregator = f.getAggregator()
-	f.spans = map[string]*AnomalousSpan{}
+	f.spans = map[string]*Span{}
 	return nil
 }
 
-func (f *GatherFilter) Connect(in chan Ruling, out chan AnomalousSpan) error {
-	for ruling := range in {
-		f.FlushExpiredSpans(ruling.Window.End, out)
-		if !ruling.Anomalous {
-			continue
-		}
+func (f *GatherFilter) Connect(in chan Ruling) chan Span {
+	out := make(chan Span)
 
-		span, ok := f.spans[ruling.Window.Series]
-		if !ok {
-			span = &AnomalousSpan{
-				Series: ruling.Window.Series,
-				Values: make([]float64, 1),
-				Start:  ruling.Window.End,
+	go func() {
+		defer close(out)
+
+		for ruling := range in {
+			f.FlushExpiredSpans(ruling.Window.End, out)
+			if !ruling.Anomalous {
+				continue
 			}
-			f.spans[ruling.Window.Series] = span
-		}
 
-		value, err := f.getRulingValue(ruling)
-		if err != nil {
-			return err
+			span, ok := f.spans[ruling.Window.Series]
+			if !ok {
+				span = &Span{
+					Series: ruling.Window.Series,
+					Values: make([]float64, 1),
+					Start:  ruling.Window.End,
+				}
+				f.spans[ruling.Window.Series] = span
+			}
+
+			value, err := f.getRulingValue(ruling)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			span.Values = append(span.Values, value)
+			agg, err := f.aggregator(span.Values)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
+			span.Aggregation = agg
+			span.End = ruling.Window.End
 		}
-		span.Values = append(span.Values, value)
-		agg, err := f.aggregator(span.Values)
-		if err != nil {
-			return err
-		}
-		span.Aggregation = agg
-		span.End = ruling.Window.End
-	}
-	return nil
+	}()
+	return out
 }
 
-func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan AnomalousSpan) {
+func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
 	for series, span := range f.spans {
 		if int64(now.Sub(span.End)/time.Second) > f.GatherConfig.SpanWidth {
 			f.flushSpan(span, out)
@@ -105,7 +114,7 @@ func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan AnomalousSpan) 
 	}
 }
 
-func (f *GatherFilter) flushSpan(span *AnomalousSpan, out chan AnomalousSpan) {
+func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
 	span.Duration = span.End.Sub(span.Start)
 	if span.Duration == 0.0 {
 		span.Duration = time.Duration(f.GatherConfig.SampleInterval) * time.Second

@@ -9,7 +9,8 @@ type Ruling struct {
 	Normed        float64
 }
 
-func (r Ruling) fillMessage(m *message.Message) error {
+func (r Ruling) FillMessage(m *message.Message) error {
+	r.Window.FillMessage(m)
 	anomalous, err := message.NewField("anomalous", r.Anomalous, "")
 	if err != nil {
 		return err
