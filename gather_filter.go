@@ -28,19 +28,22 @@ type Gatherer interface {
 	pipeline.Plugin
 	Connect(in chan Ruling) chan Span
 	FlushExpiredSpans(now time.Time, out chan Span)
+	PrintSpansInMem()
 }
 
 type GatherConfig struct {
-	SpanWidth      int64 `toml:"span_width"`
-	Statistic      string
-	ValueField     string `toml:"value_field"`
-	SampleInterval int64  `toml:"sample_interval"`
+	SpanWidth  int64 `toml:"span_width"`
+	Statistic  string
+	ValueField string `toml:"value_field"`
+	LastDate   string `toml:"last_date"`
 }
 
 type GatherFilter struct {
 	*GatherConfig
 	aggregator func(stats.Float64Data) (float64, error)
 	spans      map[string]*Span
+	seriesNow  map[string]time.Time
+	lastDate   time.Time
 }
 
 func (f *GatherFilter) ConfigStruct() interface{} {
@@ -56,12 +59,22 @@ func (f *GatherFilter) Init(config interface{}) error {
 	if f.GatherConfig.SpanWidth <= 0 {
 		return errors.New("'span_width' must be greater than zero.")
 	}
-	if f.GatherConfig.SampleInterval <= 0 {
-		return errors.New("'sample_interval' must be greater than zero.")
+
+	if f.GatherConfig.LastDate == "today" {
+		f.lastDate = time.Now()
+	} else if f.GatherConfig.LastDate == "yesterday" {
+		f.lastDate = time.Now().Add(-1 * time.Duration(24) * time.Hour)
+	} else {
+		lastDate, err := time.Parse(time.RFC3339, f.GatherConfig.LastDate)
+		if err != nil {
+			return err
+		}
+		f.lastDate = lastDate
 	}
 
 	f.aggregator = f.getAggregator()
 	f.spans = map[string]*Span{}
+	f.seriesNow = map[string]time.Time{}
 	return nil
 }
 
@@ -72,19 +85,25 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 		defer close(out)
 
 		for ruling := range in {
-			f.FlushExpiredSpans(ruling.Window.End, out)
-			if !ruling.Anomalous {
-				continue
-			}
+			thisSeries := ruling.Window.Series
+			f.seriesNow[thisSeries] = ruling.Window.End
+			//TODO Flush spans sitting at end of series input out of memory
 
-			span, ok := f.spans[ruling.Window.Series]
+			f.FlushExpiredSpansForSeries(thisSeries, out)
+			span, ok := f.spans[thisSeries]
 			if !ok {
-				span = &Span{
-					Series: ruling.Window.Series,
-					Values: make([]float64, 1),
-					Start:  ruling.Window.End,
+				// If this ruling isn't anomalous, don't start keeping track of a new span.
+				if !ruling.Anomalous {
+					continue
 				}
-				f.spans[ruling.Window.Series] = span
+				span = &Span{
+					Series:      thisSeries,
+					Values:      []float64{},
+					Start:       ruling.Window.Start,
+					End:         ruling.Window.End,
+					Passthrough: ruling.Window.Passthrough,
+				}
+				f.spans[thisSeries] = span
 			}
 
 			value, err := f.getRulingValue(ruling)
@@ -93,33 +112,56 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 				continue
 			}
 			span.Values = append(span.Values, value)
-			agg, err := f.aggregator(span.Values)
-			if err != nil {
-				fmt.Println(err)
-				continue
+			// If this ruling is anomlous, bump the end of this span out so we
+			// continue to keep track of it.
+			if ruling.Anomalous {
+				span.End = ruling.Window.End
 			}
-			span.Aggregation = agg
-			span.End = ruling.Window.End
 		}
 	}()
 	return out
 }
 
-func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
+func (f *GatherFilter) FlushExpiredSpansForSeries(flushSeries string, out chan Span) {
 	for series, span := range f.spans {
-		if int64(now.Sub(span.End)/time.Second) > f.GatherConfig.SpanWidth {
+		if series != flushSeries {
+			continue
+		}
+		now := f.seriesNow[span.Series]
+		age := int64(now.Sub(span.End) / time.Second)
+		//willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
+
+		if age > f.GatherConfig.SpanWidth { // || willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
 			delete(f.spans, series)
 		}
 	}
 }
 
-func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
-	span.Duration = span.End.Sub(span.Start)
-	if span.Duration == 0.0 {
-		span.Duration = time.Duration(f.GatherConfig.SampleInterval) * time.Second
+func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
+	for series, span := range f.spans {
+		age := int64(now.Sub(span.End) / time.Second)
+
+		if age > f.GatherConfig.SpanWidth {
+			f.flushSpan(span, out)
+			delete(f.spans, series)
+		}
 	}
-	span.Score = float64(span.Duration/time.Second) * span.Aggregation
+}
+
+func (f *GatherFilter) PrintSpansInMem() {
+	for series, span := range f.spans {
+		fmt.Println(series, span)
+	}
+}
+
+func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
+	span.Duration = span.End.Sub(span.Start) // + (time.Duration(f.GatherConfig.SampleInterval) * time.Second)
+	err := span.CalcScore(f.aggregator)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	out <- *span
 }
 

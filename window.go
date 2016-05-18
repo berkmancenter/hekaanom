@@ -8,10 +8,11 @@ import (
 )
 
 type Window struct {
-	Start  time.Time
-	End    time.Time
-	Series string
-	Value  float64
+	Start       time.Time
+	End         time.Time
+	Series      string
+	Value       float64
+	Passthrough []*message.Field
 }
 
 func WindowFromMessage(m *message.Message) (Window, error) {
@@ -41,7 +42,7 @@ func WindowFromMessage(m *message.Message) (Window, error) {
 		return Window{}, err
 	}
 
-	return Window{startTime, endTime, series.(string), value.(float64)}, nil
+	return Window{startTime, endTime, series.(string), value.(float64), nil}, nil
 }
 
 func (w Window) FillMessage(m *message.Message) error {

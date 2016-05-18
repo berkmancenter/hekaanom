@@ -1,6 +1,7 @@
 package hekaanom
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"time"
@@ -23,18 +24,17 @@ func init() {
 				windower: new(WindowFilter),
 				detector: new(DetectFilter),
 				gatherer: new(GatherFilter),
-				binner:   new(BinFilter),
 			}
 		})
 }
 
 type AnomalyConfig struct {
-	SeriesField  string        `toml:"series_field"`
+	SeriesFields []string      `toml:"series_fields"`
 	ValueField   string        `toml:"value_field"`
+	Realtime     bool          `toml:"realtime"`
 	WindowConfig *WindowConfig `toml:"window"`
 	DetectConfig *DetectConfig `toml:"detect"`
 	GatherConfig *GatherConfig `toml:"gather"`
-	BinConfig    *BinConfig    `toml:"bin"`
 }
 
 type AnomalyFilter struct {
@@ -44,7 +44,6 @@ type AnomalyFilter struct {
 	windower Windower
 	detector Detector
 	gatherer Gatherer
-	binner   Binner
 	metrics  chan Metric
 	spans    chan Span
 }
@@ -54,7 +53,6 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
 		DetectConfig: f.detector.ConfigStruct().(*DetectConfig),
 		GatherConfig: f.gatherer.ConfigStruct().(*GatherConfig),
-		BinConfig:    f.binner.ConfigStruct().(*BinConfig),
 	}
 }
 
@@ -70,9 +68,6 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 	if err := f.gatherer.Init(f.AnomalyConfig.GatherConfig); err != nil {
 		return err
 	}
-	if err := f.binner.Init(f.AnomalyConfig.BinConfig); err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -85,17 +80,9 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 
 	windows := f.windower.Connect(f.metrics)
 	rulings := f.detector.Connect(windows)
-
-	rulingChans := broadcastRuling(rulings, 2)
 	f.spans = f.gatherer.Connect(rulings)
 
-	spanChans := broadcastSpan(f.spans, 2)
-
-	bins := f.binner.Connect(spanChans[0])
-
-	f.publishRulings(rulingChans[1])
-	f.publishSpans(spanChans[1])
-	f.publishBins(bins)
+	f.publishSpans(f.spans)
 
 	return nil
 }
@@ -108,8 +95,11 @@ func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 
 func (f *AnomalyFilter) TimerEvent() error {
 	f.detector.PrintQs()
+	//f.gatherer.PrintSpansInMem()
 	now := time.Now()
-	f.gatherer.FlushExpiredSpans(now, f.spans)
+	if f.AnomalyConfig.Realtime {
+		f.gatherer.FlushExpiredSpans(now, f.spans)
+	}
 	return nil
 }
 
@@ -128,26 +118,6 @@ func (f *AnomalyFilter) publishSpans(in chan Span) error {
 			msg := newPack.Message
 			msg.SetType("anom.span")
 			if err = span.FillMessage(msg); err != nil {
-				fmt.Println(err)
-				continue
-			}
-			f.runner.Inject(newPack)
-		}
-	}()
-	return nil
-}
-
-func (f *AnomalyFilter) publishBins(in chan Bin) error {
-	go func() {
-		for bin := range in {
-			newPack, err := f.helper.PipelinePack(0)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-			msg := newPack.Message
-			msg.SetType("anom.bin")
-			if err = bin.FillMessage(msg); err != nil {
 				fmt.Println(err)
 				continue
 			}
@@ -182,18 +152,46 @@ func (f *AnomalyFilter) metricFromMessage(msg *message.Message) Metric {
 		time.Unix(0, msg.GetTimestamp()),
 		f.getMessageSeries(msg),
 		f.getMessageValue(msg),
+		f.getMessagePassthrough(msg),
 	}
 }
 
 func (f *AnomalyFilter) getMessageSeries(msg *message.Message) string {
-	if f.AnomalyConfig.SeriesField == "" {
+	var series bytes.Buffer
+	var values []string
+
+	for _, field := range f.AnomalyConfig.SeriesFields {
+		f := msg.FindFirstField(field)
+		if f == nil {
+			continue
+		}
+		val := f.GetValueString()
+		values = append(values, val...)
+	}
+
+	for i, val := range values {
+		series.WriteString(val)
+		if i < len(values)-1 {
+			series.WriteString("|")
+		}
+	}
+
+	seriesStr := series.String()
+	if len(seriesStr) == 0 {
 		return DefaultMessageSeries
 	}
-	value, ok := msg.GetFieldValue(f.AnomalyConfig.SeriesField)
-	if !ok {
-		return DefaultMessageSeries
+	return seriesStr
+}
+
+func (f *AnomalyFilter) getMessagePassthrough(msg *message.Message) []*message.Field {
+	var fields []*message.Field
+	for _, field := range f.AnomalyConfig.SeriesFields {
+		f := msg.FindFirstField(field)
+		if f != nil {
+			fields = append(fields, f)
+		}
 	}
-	return value.(string)
+	return fields
 }
 
 func broadcastSpan(in chan Span, numOut int) []chan Span {

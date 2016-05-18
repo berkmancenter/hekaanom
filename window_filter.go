@@ -43,8 +43,9 @@ func (f *WindowFilter) Connect(in <-chan Metric) chan Window {
 			window, ok := f.windows[metric.Series]
 			if !ok {
 				window = &Window{
-					Start:  metric.Timestamp,
-					Series: metric.Series,
+					Start:       metric.Timestamp,
+					Series:      metric.Series,
+					Passthrough: metric.Passthrough,
 				}
 				f.windows[metric.Series] = window
 			}
@@ -63,7 +64,9 @@ func (f *WindowFilter) Connect(in <-chan Metric) chan Window {
 }
 
 func (f *WindowFilter) flushWindow(window *Window, out chan Window) error {
+	// Add one window width to the end of the width because the end is exclusive
+	window.End = window.End.Add(time.Duration(f.WindowConfig.WindowWidth) * time.Second)
 	out <- *window
-	*window = Window{Series: window.Series}
+	*window = Window{Series: window.Series, Passthrough: window.Passthrough}
 	return nil
 }

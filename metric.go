@@ -1,9 +1,14 @@
 package hekaanom
 
-import "time"
+import (
+	"time"
+
+	"github.com/mozilla-services/heka/message"
+)
 
 type Metric struct {
-	Timestamp time.Time
-	Series    string
-	Value     float64
+	Timestamp   time.Time
+	Series      string
+	Value       float64
+	Passthrough []*message.Field
 }
