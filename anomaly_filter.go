@@ -95,7 +95,7 @@ func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 
 func (f *AnomalyFilter) TimerEvent() error {
 	f.detector.PrintQs()
-	f.gatherer.PrintSpansInMem()
+	//f.gatherer.PrintSpansInMem()
 	now := time.Now()
 	f.gatherer.FlushStuckSpans(f.spans)
 	if f.AnomalyConfig.Realtime {
