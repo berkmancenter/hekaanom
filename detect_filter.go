@@ -31,7 +31,7 @@ type DetectConfig struct {
 
 type DetectAlgo interface {
 	Init(config interface{}) error
-	Detect(win Window) Ruling
+	Detect(win Window, out chan Ruling)
 }
 
 type DetectFilter struct {
@@ -87,7 +87,7 @@ func (f *DetectFilter) Connect(in chan Window) chan Ruling {
 
 	detect := func(detector DetectAlgo, in chan Window, out chan Ruling) {
 		for window := range in {
-			out <- detector.Detect(window)
+			detector.Detect(window, out)
 		}
 		wg.Done()
 	}

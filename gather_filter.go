@@ -28,6 +28,7 @@ type Gatherer interface {
 	pipeline.Plugin
 	Connect(in chan Ruling) chan Span
 	FlushExpiredSpans(now time.Time, out chan Span)
+	FlushStuckSpans(out chan Span)
 	PrintSpansInMem()
 }
 
@@ -129,11 +130,12 @@ func (f *GatherFilter) FlushExpiredSpansForSeries(flushSeries string, out chan S
 		}
 		now := f.seriesNow[span.Series]
 		age := int64(now.Sub(span.End) / time.Second)
-		//willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
+		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-		if age > f.GatherConfig.SpanWidth { // || willExpireAt.After(f.lastDate) {
+		if age > f.GatherConfig.SpanWidth || willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
 			delete(f.spans, series)
+			delete(f.seriesNow, series)
 		}
 	}
 }
@@ -141,17 +143,39 @@ func (f *GatherFilter) FlushExpiredSpansForSeries(flushSeries string, out chan S
 func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
 	for series, span := range f.spans {
 		age := int64(now.Sub(span.End) / time.Second)
+		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-		if age > f.GatherConfig.SpanWidth {
+		if age > f.GatherConfig.SpanWidth || willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
 			delete(f.spans, series)
+			delete(f.seriesNow, series)
+		}
+	}
+}
+
+func (f *GatherFilter) FlushStuckSpans(out chan Span) {
+	for series, span := range f.spans {
+		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
+
+		if willExpireAt.After(f.lastDate) {
+			f.flushSpan(span, out)
+			delete(f.spans, series)
+			delete(f.seriesNow, series)
 		}
 	}
 }
 
 func (f *GatherFilter) PrintSpansInMem() {
+	fmt.Println("Spans in mem")
 	for series, span := range f.spans {
-		fmt.Println(series, span)
+		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
+
+		fmt.Println(series)
+		fmt.Println("start", span.Start)
+		fmt.Println("end", span.End)
+		fmt.Println("now", f.seriesNow[span.Series])
+		fmt.Println("expires", willExpireAt)
+		fmt.Println("")
 	}
 }
 

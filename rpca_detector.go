@@ -12,7 +12,7 @@ type RPCADetector struct {
 	majorFreq int
 	minorFreq int
 	autoDiff  bool
-	series    map[string][]float64
+	series    map[string][]*Window
 }
 
 func (d *RPCADetector) Init(config interface{}) error {
@@ -45,26 +45,51 @@ func (d *RPCADetector) Init(config interface{}) error {
 		autoDiff = true
 	}
 	d.autoDiff = autoDiff.(bool)
-	d.series = map[string][]float64{}
+	d.series = map[string][]*Window{}
 	return nil
 }
 
-func (d *RPCADetector) Detect(win Window) Ruling {
+func (d *RPCADetector) Detect(win Window, out chan Ruling) {
 
-	d.series[win.Series] = append(d.series[win.Series], win.Value)
+	d.series[win.Series] = append(d.series[win.Series], &win)
+	series := d.series[win.Series]
 
-	if len(d.series[win.Series]) < d.minorFreq {
-		return Ruling{Window: win}
+	if len(series) < d.minorFreq {
+		return
 	}
 
-	if len(d.series[win.Series]) > d.minorFreq {
-		d.series[win.Series] = d.series[win.Series][1:]
+	// If this completes our window, send all the anomalies we haven't been
+	// sending up to now.
+	sendAll := false
+	if len(series) == d.minorFreq {
+		sendAll = true
 	}
 
-	anoms := rpca.FindAnomalies(d.series[win.Series], rpca.Frequency(d.majorFreq), rpca.AutoDiff(d.autoDiff))
-	i := len(anoms.Values) - 1
-	anomalous, anomalousness := anoms.Positions[i], anoms.Values[i]
-	normed := anoms.NormedValues[i]
+	if len(series) > d.minorFreq {
+		d.series[win.Series] = series[1:]
+	}
 
-	return Ruling{win, anomalous, anomalousness, normed}
+	values := make([]float64, len(d.series[win.Series]))
+	for i, thisWin := range d.series[win.Series] {
+		values[i] = thisWin.Value
+	}
+
+	anoms := rpca.FindAnomalies(values, rpca.Frequency(d.majorFreq), rpca.AutoDiff(d.autoDiff))
+
+	if sendAll {
+		for i := range anoms.Positions {
+			out <- Ruling{
+				Window:        *series[i],
+				Anomalous:     anoms.Positions[i],
+				Anomalousness: anoms.Values[i],
+				Normed:        anoms.NormedValues[i],
+			}
+		}
+	} else {
+		// Just send the latest anomaly
+		i := len(anoms.Values) - 1
+		anomalous, anomalousness := anoms.Positions[i], anoms.Values[i]
+		normed := anoms.NormedValues[i]
+		out <- Ruling{win, anomalous, anomalousness, normed}
+	}
 }
