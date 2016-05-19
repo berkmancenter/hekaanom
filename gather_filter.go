@@ -88,7 +88,6 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 		for ruling := range in {
 			thisSeries := ruling.Window.Series
 			f.seriesNow[thisSeries] = ruling.Window.End
-			//TODO Flush spans sitting at end of series input out of memory
 
 			f.FlushExpiredSpansForSeries(thisSeries, out)
 			span, ok := f.spans[thisSeries]
@@ -132,7 +131,7 @@ func (f *GatherFilter) FlushExpiredSpansForSeries(flushSeries string, out chan S
 		age := int64(now.Sub(span.End) / time.Second)
 		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-		if age > f.GatherConfig.SpanWidth || willExpireAt.After(f.lastDate) {
+		if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
 			delete(f.spans, series)
 			delete(f.seriesNow, series)
@@ -145,7 +144,7 @@ func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
 		age := int64(now.Sub(span.End) / time.Second)
 		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-		if age > f.GatherConfig.SpanWidth || willExpireAt.After(f.lastDate) {
+		if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
 			delete(f.spans, series)
 			delete(f.seriesNow, series)
