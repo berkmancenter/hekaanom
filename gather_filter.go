@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/montanaflynn/stats"
@@ -42,9 +43,14 @@ type GatherConfig struct {
 type GatherFilter struct {
 	*GatherConfig
 	aggregator func(stats.Float64Data) (float64, error)
-	spans      map[string]*Span
-	seriesNow  map[string]time.Time
+	spanCache  spanCache
 	lastDate   time.Time
+}
+
+type spanCache struct {
+	sync.Mutex
+	spans map[string]*Span
+	nows  map[string]time.Time
 }
 
 func (f *GatherFilter) ConfigStruct() interface{} {
@@ -74,8 +80,7 @@ func (f *GatherFilter) Init(config interface{}) error {
 	}
 
 	f.aggregator = f.getAggregator()
-	f.spans = map[string]*Span{}
-	f.seriesNow = map[string]time.Time{}
+	f.spanCache = spanCache{spans: map[string]*Span{}, nows: map[string]time.Time{}}
 	return nil
 }
 
@@ -87,11 +92,15 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 
 		for ruling := range in {
 			thisSeries := ruling.Window.Series
-			f.seriesNow[thisSeries] = ruling.Window.End
 
-			f.FlushExpiredSpansForSeries(thisSeries, out)
-			span, ok := f.spans[thisSeries]
-			if !ok {
+			f.spanCache.Lock()
+			f.spanCache.nows[thisSeries] = ruling.Window.End
+
+			span, ok := f.spanCache.spans[thisSeries]
+			if ok {
+				now := f.spanCache.nows[span.Series]
+				f.FlushIfExpired(span, now, out)
+			} else {
 				// If this ruling isn't anomalous, don't start keeping track of a new span.
 				if !ruling.Anomalous {
 					continue
@@ -103,8 +112,9 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 					End:         ruling.Window.End,
 					Passthrough: ruling.Window.Passthrough,
 				}
-				f.spans[thisSeries] = span
+				f.spanCache.spans[thisSeries] = span
 			}
+			f.spanCache.Unlock()
 
 			value, err := f.getRulingValue(ruling)
 			if err != nil {
@@ -122,60 +132,55 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 	return out
 }
 
-func (f *GatherFilter) FlushExpiredSpansForSeries(flushSeries string, out chan Span) {
-	for series, span := range f.spans {
-		if series != flushSeries {
-			continue
-		}
-		now := f.seriesNow[span.Series]
-		age := int64(now.Sub(span.End) / time.Second)
-		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
+func (f *GatherFilter) FlushIfExpired(span *Span, now time.Time, out chan Span) {
+	// Only called from within a goroutine that already locks spanCache for
+	// writing, so we don't need to lock here.
+	age := int64(now.Sub(span.End) / time.Second)
+	willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-		if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
-			f.flushSpan(span, out)
-			delete(f.spans, series)
-			delete(f.seriesNow, series)
-		}
+	if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
+		f.flushSpan(span, out)
+		delete(f.spanCache.spans, span.Series)
+		delete(f.spanCache.nows, span.Series)
 	}
 }
 
 func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
-	for series, span := range f.spans {
-		age := int64(now.Sub(span.End) / time.Second)
-		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
-
-		if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
-			f.flushSpan(span, out)
-			delete(f.spans, series)
-			delete(f.seriesNow, series)
-		}
+	f.spanCache.Lock()
+	for _, span := range f.spanCache.spans {
+		f.FlushIfExpired(span, now, out)
 	}
+	f.spanCache.Unlock()
 }
 
 func (f *GatherFilter) FlushStuckSpans(out chan Span) {
-	for series, span := range f.spans {
+	f.spanCache.Lock()
+	for series, span := range f.spanCache.spans {
 		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
 		if willExpireAt.After(f.lastDate) {
 			f.flushSpan(span, out)
-			delete(f.spans, series)
-			delete(f.seriesNow, series)
+			delete(f.spanCache.spans, series)
+			delete(f.spanCache.nows, series)
 		}
 	}
+	f.spanCache.Unlock()
 }
 
 func (f *GatherFilter) PrintSpansInMem() {
 	fmt.Println("Spans in mem")
-	for series, span := range f.spans {
+	f.spanCache.Lock()
+	for series, span := range f.spanCache.spans {
 		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
 		fmt.Println(series)
 		fmt.Println("start", span.Start)
 		fmt.Println("end", span.End)
-		fmt.Println("now", f.seriesNow[span.Series])
+		fmt.Println("now", f.spanCache.nows[span.Series])
 		fmt.Println("expires", willExpireAt)
 		fmt.Println("")
 	}
+	f.spanCache.Unlock()
 }
 
 func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
