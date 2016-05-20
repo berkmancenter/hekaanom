@@ -103,6 +103,7 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 			} else {
 				// If this ruling isn't anomalous, don't start keeping track of a new span.
 				if !ruling.Anomalous {
+					f.spanCache.Unlock()
 					continue
 				}
 				span = &Span{
