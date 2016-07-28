@@ -11,10 +11,10 @@ import (
 type Span struct {
 	Start       time.Time
 	End         time.Time
+	Duration    time.Duration
 	Series      string
 	Aggregation float64
 	Values      []float64
-	Duration    time.Duration
 	Score       float64
 	Passthrough []*message.Field
 }
@@ -60,25 +60,21 @@ func (s Span) FillMessage(m *message.Message) error {
 	if err != nil {
 		return errors.New("Could not create 'start' field")
 	}
-	m.AddField(start)
 
 	end, err := message.NewField("end", s.End.Format(TimeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'end' field")
 	}
-	m.AddField(end)
 
 	series, err := message.NewField("series", s.Series, "")
 	if err != nil {
 		return errors.New("Could not create 'series' field")
 	}
-	m.AddField(series)
 
 	agg, err := message.NewField("aggregation", s.Aggregation, "count")
 	if err != nil {
 		return errors.New("Could not create 'aggregation' field")
 	}
-	m.AddField(agg)
 
 	valuesField := message.NewFieldInit("values", message.Field_DOUBLE, "count")
 	for _, val := range s.Values {
@@ -87,24 +83,28 @@ func (s Span) FillMessage(m *message.Message) error {
 			return errors.New("Could not create 'values' field")
 		}
 	}
-	m.AddField(valuesField)
 
 	durField, err := message.NewField("duration", s.Duration.Seconds(), "seconds")
 	if err != nil {
 		return errors.New("Could not create 'duration' field")
 	}
-	m.AddField(durField)
 
 	score, err := message.NewField("score", s.Score, "count")
 	if err != nil {
 		return errors.New("Could not create 'score' field")
 	}
+
+	m.SetTimestamp(s.End.UnixNano())
+	m.AddField(series)
+	m.AddField(start)
+	m.AddField(end)
+	m.AddField(durField)
+	m.AddField(agg)
 	m.AddField(score)
+	m.AddField(valuesField)
 
 	for _, field := range s.Passthrough {
 		m.AddField(field)
 	}
-
-	m.SetTimestamp(s.End.UnixNano())
 	return nil
 }

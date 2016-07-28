@@ -7,10 +7,12 @@ type Ruling struct {
 	Anomalous     bool
 	Anomalousness float64
 	Normed        float64
+	Passthrough   []*message.Field
 }
 
 func (r Ruling) FillMessage(m *message.Message) error {
 	r.Window.FillMessage(m)
+
 	anomalous, err := message.NewField("anomalous", r.Anomalous, "")
 	if err != nil {
 		return err
@@ -23,8 +25,13 @@ func (r Ruling) FillMessage(m *message.Message) error {
 	if err != nil {
 		return err
 	}
-	m.AddField(anomalous)
+
 	m.AddField(anomalousness)
 	m.AddField(normed)
+	m.AddField(anomalous)
+
+	for _, field := range r.Passthrough {
+		m.AddField(field)
+	}
 	return nil
 }

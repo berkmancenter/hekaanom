@@ -83,6 +83,7 @@ func (d *RPCADetector) Detect(win Window, out chan Ruling) {
 				Anomalous:     anoms.Positions[i],
 				Anomalousness: anoms.Values[i],
 				Normed:        anoms.NormedValues[i],
+				Passthrough:   series[i].Passthrough,
 			}
 		}
 	} else {
@@ -90,6 +91,6 @@ func (d *RPCADetector) Detect(win Window, out chan Ruling) {
 		i := len(anoms.Values) - 1
 		anomalous, anomalousness := anoms.Positions[i], anoms.Values[i]
 		normed := anoms.NormedValues[i]
-		out <- Ruling{win, anomalous, anomalousness, normed}
+		out <- Ruling{win, anomalous, anomalousness, normed, win.Passthrough}
 	}
 }

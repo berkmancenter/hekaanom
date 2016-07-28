@@ -18,7 +18,6 @@ var (
 		"Sum":      stats.Sum,
 		"Mean":     stats.Mean,
 		"Median":   stats.Median,
-		"MAD":      stats.MedianAbsoluteDeviation,
 		"Midhinge": stats.Midhinge,
 		"Trimean":  stats.Trimean,
 	}
@@ -34,10 +33,26 @@ type Gatherer interface {
 }
 
 type GatherConfig struct {
-	SpanWidth  int64 `toml:"span_width"`
-	Statistic  string
+	// Is gathering anomalies into spans disabled?
+	Disabled bool `toml:"disabled"`
+
+	// If two anomalies occur within SpanWidth seconds of one another (i.e. their
+	// ends are less than or equal to SpanWidth seconds apart), they're gathered
+	// into the same anomalous span.
+	SpanWidth int64 `toml:"span_width"`
+
+	// Statistic is used to describe the anomalous span in one number derived
+	// from the ValueField's of the gathered anomalies. Possible values are
+	// "Sum", "Mean", "Median", "Midhinge", and "Trimean".
+	Statistic string
+
+	// ValueField identifies the field of each anomaly that should be used to
+	// generate their parent span's statistic.
 	ValueField string `toml:"value_field"`
-	LastDate   string `toml:"last_date"`
+
+	// LastDate is the date and time of the final piece of data you're
+	// processing. We use this to close out the last span.
+	LastDate string `toml:"last_date"`
 }
 
 type GatherFilter struct {
@@ -55,6 +70,7 @@ type spanCache struct {
 
 func (f *GatherFilter) ConfigStruct() interface{} {
 	return &GatherConfig{
+		Disabled:   false,
 		Statistic:  DefaultAggregator,
 		ValueField: DefaultValueField,
 	}
@@ -62,6 +78,10 @@ func (f *GatherFilter) ConfigStruct() interface{} {
 
 func (f *GatherFilter) Init(config interface{}) error {
 	f.GatherConfig = config.(*GatherConfig)
+
+	if f.GatherConfig.Disabled {
+		return nil
+	}
 
 	if f.GatherConfig.SpanWidth <= 0 {
 		return errors.New("'span_width' must be greater than zero.")
@@ -87,6 +107,13 @@ func (f *GatherFilter) Init(config interface{}) error {
 func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 	out := make(chan Span)
 
+	// There are four things that can be happening here:
+	//     We can have an active span and get non-anomalous, in which case we expire it or add it to the span.
+	//     We can have an active span and get anomalous, in which case we add it to the span and extend the span's lifespan.
+	//     We can not have an active span and get a non-anomalous, in which case we do nothing.
+	//     We can not have an active span and get anomalous, in which case we make a new span.
+	// We always update the time and expire spans.
+
 	go func() {
 		defer close(out)
 
@@ -94,62 +121,79 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 			thisSeries := ruling.Window.Series
 
 			f.spanCache.Lock()
-			f.spanCache.nows[thisSeries] = ruling.Window.End
 
+			// Update the time for the current series.
+			now := ruling.Window.End
+			f.spanCache.nows[thisSeries] = now
+
+			value, err := f.getRulingValue(ruling)
+			if err != nil {
+				fmt.Println(err)
+				f.spanCache.Unlock()
+				continue
+			}
+
+			// Does a span already exist for the current series?
 			span, ok := f.spanCache.spans[thisSeries]
 			if ok {
-				now := f.spanCache.nows[span.Series]
-				f.FlushIfExpired(span, now, out)
-			} else {
-				// If this ruling isn't anomalous, don't start keeping track of a new span.
-				if !ruling.Anomalous {
-					f.spanCache.Unlock()
-					continue
+				if ruling.Anomalous {
+					// This ruling is anomalous, so add it to this span and extend the
+					// span's lifespan.
+					span.Values = append(span.Values, value)
+					span.End = now
+				} else {
+					// This ruling is not anomalous. If this span is expired, flush it.
+					// If it's not, add this ruling but don't extend its lifespan.
+					if f.SpanExpired(span, now) {
+						f.FlushSpan(span, out)
+					} else {
+						span.Values = append(span.Values, value)
+					}
 				}
+			} else if ruling.Anomalous {
+				// This ruling is anomalous, so start a new span.
 				span = &Span{
 					Series:      thisSeries,
-					Values:      []float64{},
+					Values:      []float64{value},
 					Start:       ruling.Window.Start,
 					End:         ruling.Window.End,
 					Passthrough: ruling.Window.Passthrough,
 				}
 				f.spanCache.spans[thisSeries] = span
 			}
-			f.spanCache.Unlock()
 
-			value, err := f.getRulingValue(ruling)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-			span.Values = append(span.Values, value)
-			// If this ruling is anomlous, bump the end of this span out so we
-			// continue to keep track of it.
-			if ruling.Anomalous {
-				span.End = ruling.Window.End
-			}
+			f.spanCache.Unlock()
 		}
 	}()
 	return out
 }
 
-func (f *GatherFilter) FlushIfExpired(span *Span, now time.Time, out chan Span) {
-	// Only called from within a goroutine that already locks spanCache for
-	// writing, so we don't need to lock here.
-	age := int64(now.Sub(span.End) / time.Second)
+func (f *GatherFilter) SpanExpired(span *Span, now time.Time) bool {
+	// When will this span be too old?
 	willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
-	if age >= f.GatherConfig.SpanWidth || willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate) {
-		f.flushSpan(span, out)
-		delete(f.spanCache.spans, span.Series)
-		delete(f.spanCache.nows, span.Series)
-	}
+	isExpired := now.After(willExpireAt)
+
+	// Are we never going to get enough data to expire this span naturally?
+	outOfData := willExpireAt.Equal(f.lastDate) || willExpireAt.After(f.lastDate)
+
+	return isExpired || outOfData
+}
+
+func (f *GatherFilter) FlushSpan(span *Span, out chan Span) {
+	// Only called from within a goroutine that already locks spanCache for
+	// writing, so we don't need to lock here.
+	f.flushSpan(span, out)
+	delete(f.spanCache.spans, span.Series)
+	delete(f.spanCache.nows, span.Series)
 }
 
 func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
 	f.spanCache.Lock()
 	for _, span := range f.spanCache.spans {
-		f.FlushIfExpired(span, now, out)
+		if f.SpanExpired(span, now) {
+			f.FlushSpan(span, out)
+		}
 	}
 	f.spanCache.Unlock()
 }

@@ -63,15 +63,16 @@ func (w Window) FillMessage(m *message.Message) error {
 		return errors.New("Could not create 'value' field")
 	}
 	duration := w.End.Sub(w.Start)
-	durField, err := message.NewField("window_duration", duration.String(), "duration")
+	durField, err := message.NewField("window_duration", duration.Seconds(), "seconds")
 	if err != nil {
 		return errors.New("Could not create 'duration' field")
 	}
 	m.SetTimestamp(w.End.UnixNano())
+	m.AddField(series)
 	m.AddField(start)
 	m.AddField(end)
-	m.AddField(series)
 	m.AddField(durField)
 	m.AddField(value)
+
 	return nil
 }

@@ -35,6 +35,7 @@ type AnomalyConfig struct {
 	WindowConfig *WindowConfig `toml:"window"`
 	DetectConfig *DetectConfig `toml:"detect"`
 	GatherConfig *GatherConfig `toml:"gather"`
+	Debug        bool          `toml:"debug"`
 }
 
 type AnomalyFilter struct {
@@ -53,6 +54,7 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
 		DetectConfig: f.detector.ConfigStruct().(*DetectConfig),
 		GatherConfig: f.gatherer.ConfigStruct().(*GatherConfig),
+		Debug:        false,
 	}
 }
 
@@ -76,13 +78,18 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 	f.runner = fr
 	f.helper = h
 	f.metrics = make(chan Metric)
-	f.spans = make(chan Span)
 
 	windows := f.windower.Connect(f.metrics)
 	rulings := f.detector.Connect(windows)
-	f.spans = f.gatherer.Connect(rulings)
 
-	f.publishSpans(f.spans)
+	if f.AnomalyConfig.GatherConfig.Disabled {
+		f.publishRulings(rulings)
+	} else {
+		rulingChans := broadcastRuling(rulings, 2)
+		f.publishRulings(rulingChans[0])
+		f.spans = f.gatherer.Connect(rulingChans[1])
+		f.publishSpans(f.spans)
+	}
 
 	return nil
 }
@@ -90,14 +97,16 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	metric := f.metricFromMessage(pack.Message)
 	f.metrics <- metric
+	f.runner.UpdateCursor(pack.QueueCursor)
 	return nil
 }
 
 func (f *AnomalyFilter) TimerEvent() error {
-	f.detector.PrintQs()
-	//f.gatherer.PrintSpansInMem()
+	if f.AnomalyConfig.Debug {
+		f.detector.PrintQs()
+		f.gatherer.PrintSpansInMem()
+	}
 	now := time.Now()
-	f.gatherer.FlushStuckSpans(f.spans)
 	if f.AnomalyConfig.Realtime {
 		f.gatherer.FlushExpiredSpans(now, f.spans)
 	}
@@ -114,6 +123,7 @@ func (f *AnomalyFilter) publishSpans(in chan Span) error {
 			newPack, err := f.helper.PipelinePack(0)
 			if err != nil {
 				fmt.Println("Could not create new span message")
+				fmt.Println(err)
 				continue
 			}
 			msg := newPack.Message
@@ -133,6 +143,7 @@ func (f *AnomalyFilter) publishRulings(in chan Ruling) error {
 		for ruling := range in {
 			newPack, err := f.helper.PipelinePack(0)
 			if err != nil {
+				fmt.Println("Could not create new ruling message")
 				fmt.Println(err)
 				continue
 			}
