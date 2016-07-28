@@ -137,10 +137,24 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 			span, ok := f.spanCache.spans[thisSeries]
 			if ok {
 				if ruling.Anomalous {
-					// This ruling is anomalous, so add it to this span and extend the
-					// span's lifespan.
-					span.Values = append(span.Values, value)
-					span.End = now
+					// Does this anomaly have the same sign as the current span? If so,
+					// add it to this span and extend the span's lifespan.
+					if span.Values[0] >= 0 && value >= 0 || span.Values[0] < 0 && value < 0 {
+						span.Values = append(span.Values, value)
+						span.End = now
+					} else {
+						// If they have different signs, flush that old one and make a new
+						// span.
+						f.FlushSpan(span, out)
+						span = &Span{
+							Series:      thisSeries,
+							Values:      []float64{value},
+							Start:       ruling.Window.Start,
+							End:         ruling.Window.End,
+							Passthrough: ruling.Window.Passthrough,
+						}
+						f.spanCache.spans[thisSeries] = span
+					}
 				} else {
 					// This ruling is not anomalous. If this span is expired, flush it.
 					// If it's not, add this ruling but don't extend its lifespan.
