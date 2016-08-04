@@ -21,6 +21,7 @@ type Detector interface {
 	pipeline.Plugin
 	Connect(in chan Window) chan Ruling
 	PrintQs()
+	QueuesEmpty() bool
 }
 
 type DetectConfig struct {
@@ -73,9 +74,26 @@ func (f *DetectFilter) Init(config interface{}) error {
 	return nil
 }
 
-func (f *DetectFilter) PrintQs() {
+func (f *DetectFilter) QueuesEmpty() bool {
+	for _, length := range f.QueueLengths() {
+		if length > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *DetectFilter) QueueLengths() []int {
+	lengths := make([]int, len(f.chans))
 	for i, ch := range f.chans {
-		fmt.Println(i, " - ", len(ch))
+		lengths[i] = len(ch)
+	}
+	return lengths
+}
+
+func (f *DetectFilter) PrintQs() {
+	for i, length := range f.QueueLengths() {
+		fmt.Println(i, " - ", length)
 	}
 	fmt.Println()
 }

@@ -42,11 +42,12 @@ type AnomalyFilter struct {
 	runner pipeline.FilterRunner
 	helper pipeline.PluginHelper
 	*AnomalyConfig
-	windower Windower
-	detector Detector
-	gatherer Gatherer
-	metrics  chan Metric
-	spans    chan Span
+	windower   Windower
+	detector   Detector
+	gatherer   Gatherer
+	metrics    chan Metric
+	spans      chan Span
+	processing bool
 }
 
 func (f *AnomalyFilter) ConfigStruct() interface{} {
@@ -60,6 +61,7 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 
 func (f *AnomalyFilter) Init(config interface{}) error {
 	f.AnomalyConfig = config.(*AnomalyConfig)
+	f.processing = false
 
 	if err := f.windower.Init(f.AnomalyConfig.WindowConfig); err != nil {
 		return err
@@ -98,6 +100,10 @@ func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	metric := f.metricFromMessage(pack.Message)
 	f.metrics <- metric
 	f.runner.UpdateCursor(pack.QueueCursor)
+	if !f.processing {
+		f.processing = true
+		f.runner.LogMessage("Processing started.")
+	}
 	return nil
 }
 
@@ -106,9 +112,17 @@ func (f *AnomalyFilter) TimerEvent() error {
 		f.detector.PrintQs()
 		f.gatherer.PrintSpansInMem()
 	}
-	now := time.Now()
+
+	// We should only be keeping track of the real "now" if we're doing realtime
+	// analysis.
 	if f.AnomalyConfig.Realtime {
+		now := time.Now()
 		f.gatherer.FlushExpiredSpans(now, f.spans)
+	}
+
+	if f.processing && f.detector.QueuesEmpty() {
+		f.runner.LogMessage("All queues emptied.")
+		f.processing = false
 	}
 	return nil
 }
