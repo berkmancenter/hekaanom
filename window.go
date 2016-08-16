@@ -7,7 +7,7 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-type Window struct {
+type window struct {
 	Start       time.Time
 	End         time.Time
 	Series      string
@@ -15,42 +15,42 @@ type Window struct {
 	Passthrough []*message.Field
 }
 
-func WindowFromMessage(m *message.Message) (Window, error) {
+func WindowFromMessage(m *message.Message) (window, error) {
 	start, ok := m.GetFieldValue("window_start")
 	if !ok {
-		return Window{}, errors.New("Message does not contain 'window_start' field")
+		return window{}, errors.New("Message does not contain 'window_start' field")
 	}
 	end, ok := m.GetFieldValue("window_end")
 	if !ok {
-		return Window{}, errors.New("Message does not contain 'window_end' field")
+		return window{}, errors.New("Message does not contain 'window_end' field")
 	}
 	series, ok := m.GetFieldValue("series")
 	if !ok {
-		return Window{}, errors.New("Message does not contain 'series' field")
+		return window{}, errors.New("Message does not contain 'series' field")
 	}
 	value, ok := m.GetFieldValue("value")
 	if !ok {
-		return Window{}, errors.New("Message does not contain 'value' field")
+		return window{}, errors.New("Message does not contain 'value' field")
 	}
 
-	startTime, err := time.Parse(TimeFormat, start.(string))
+	startTime, err := time.Parse(timeFormat, start.(string))
 	if err != nil {
-		return Window{}, err
+		return window{}, err
 	}
-	endTime, err := time.Parse(TimeFormat, end.(string))
+	endTime, err := time.Parse(timeFormat, end.(string))
 	if err != nil {
-		return Window{}, err
+		return window{}, err
 	}
 
-	return Window{startTime, endTime, series.(string), value.(float64), nil}, nil
+	return window{startTime, endTime, series.(string), value.(float64), nil}, nil
 }
 
-func (w Window) FillMessage(m *message.Message) error {
-	start, err := message.NewField("window_start", w.Start.Format(TimeFormat), "date-time")
+func (w window) FillMessage(m *message.Message) error {
+	start, err := message.NewField("window_start", w.Start.Format(timeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'window_start' field")
 	}
-	end, err := message.NewField("window_end", w.End.Format(TimeFormat), "date-time")
+	end, err := message.NewField("window_end", w.End.Format(timeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'window_end' field")
 	}

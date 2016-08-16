@@ -6,7 +6,7 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-type Metric struct {
+type metric struct {
 	Timestamp   time.Time
 	Series      string
 	Value       float64

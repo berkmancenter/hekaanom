@@ -8,14 +8,14 @@ import (
 	"github.com/mozilla-services/heka/pipeline"
 )
 
-type RPCADetector struct {
+type rPCADetector struct {
 	majorFreq int
 	minorFreq int
 	autoDiff  bool
-	series    map[string][]*Window
+	series    map[string][]*window
 }
 
-func (d *RPCADetector) Init(config interface{}) error {
+func (d *rPCADetector) Init(config interface{}) error {
 	conf := config.(pipeline.PluginConfig)
 
 	majorFreq, ok := conf["major_frequency"]
@@ -45,11 +45,11 @@ func (d *RPCADetector) Init(config interface{}) error {
 		autoDiff = true
 	}
 	d.autoDiff = autoDiff.(bool)
-	d.series = map[string][]*Window{}
+	d.series = map[string][]*window{}
 	return nil
 }
 
-func (d *RPCADetector) Detect(win Window, out chan Ruling) {
+func (d *rPCADetector) Detect(win window, out chan ruling) {
 
 	d.series[win.Series] = append(d.series[win.Series], &win)
 	series := d.series[win.Series]
@@ -78,7 +78,7 @@ func (d *RPCADetector) Detect(win Window, out chan Ruling) {
 
 	if sendAll {
 		for i := range anoms.Positions {
-			out <- Ruling{
+			out <- ruling{
 				Window:        *series[i],
 				Anomalous:     anoms.Positions[i],
 				Anomalousness: anoms.Values[i],
@@ -91,6 +91,6 @@ func (d *RPCADetector) Detect(win Window, out chan Ruling) {
 		i := len(anoms.Values) - 1
 		anomalous, anomalousness := anoms.Positions[i], anoms.Values[i]
 		normed := anoms.NormedValues[i]
-		out <- Ruling{win, anomalous, anomalousness, normed, win.Passthrough}
+		out <- ruling{win, anomalous, anomalousness, normed, win.Passthrough}
 	}
 }

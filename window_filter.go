@@ -7,66 +7,66 @@ import (
 	"github.com/mozilla-services/heka/pipeline"
 )
 
-type Windower interface {
+type windower interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in <-chan Metric) chan Window
+	Connect(in <-chan metric) chan window
 }
 
 type WindowConfig struct {
 	WindowWidth int64 `toml:"window_width"`
 }
 
-type WindowFilter struct {
-	windows map[string]*Window
+type windowFilter struct {
+	windows map[string]*window
 	*WindowConfig
 }
 
-func (f *WindowFilter) ConfigStruct() interface{} {
+func (f *windowFilter) ConfigStruct() interface{} {
 	return &WindowConfig{}
 }
 
-func (f *WindowFilter) Init(config interface{}) error {
+func (f *windowFilter) Init(config interface{}) error {
 	f.WindowConfig = config.(*WindowConfig)
 	if f.WindowConfig.WindowWidth <= 0 {
 		return errors.New("'window_width' setting must be greater than zero.")
 	}
-	f.windows = map[string]*Window{}
+	f.windows = map[string]*window{}
 	return nil
 }
 
-func (f *WindowFilter) Connect(in <-chan Metric) chan Window {
-	out := make(chan Window)
+func (f *windowFilter) Connect(in <-chan metric) chan window {
+	out := make(chan window)
 	go func() {
 		defer close(out)
 		for metric := range in {
-			window, ok := f.windows[metric.Series]
+			win, ok := f.windows[metric.Series]
 			if !ok {
-				window = &Window{
+				win = &window{
 					Start:       metric.Timestamp,
 					Series:      metric.Series,
 					Passthrough: metric.Passthrough,
 				}
-				f.windows[metric.Series] = window
+				f.windows[metric.Series] = win
 			}
 
-			windowAge := metric.Timestamp.Sub(window.Start)
+			windowAge := metric.Timestamp.Sub(win.Start)
 			if int64(windowAge/time.Second) >= f.WindowConfig.WindowWidth {
-				f.flushWindow(window, out)
-				window.Start = metric.Timestamp
+				f.flushWindow(win, out)
+				win.Start = metric.Timestamp
 			}
 
-			window.Value += metric.Value
-			window.End = metric.Timestamp
+			win.Value += metric.Value
+			win.End = metric.Timestamp
 		}
 	}()
 	return out
 }
 
-func (f *WindowFilter) flushWindow(window *Window, out chan Window) error {
+func (f *windowFilter) flushWindow(win *window, out chan window) error {
 	// Add one window width to the end of the width because the end is exclusive
-	window.End = window.End.Add(time.Duration(f.WindowConfig.WindowWidth) * time.Second)
-	out <- *window
-	*window = Window{Series: window.Series, Passthrough: window.Passthrough}
+	win.End = win.End.Add(time.Duration(f.WindowConfig.WindowWidth) * time.Second)
+	out <- *win
+	*win = window{Series: win.Series, Passthrough: win.Passthrough}
 	return nil
 }

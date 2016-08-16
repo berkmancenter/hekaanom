@@ -8,7 +8,7 @@ import (
 	"github.com/mozilla-services/heka/message"
 )
 
-type Span struct {
+type span struct {
 	Start       time.Time
 	End         time.Time
 	Duration    time.Duration
@@ -19,7 +19,7 @@ type Span struct {
 	Passthrough []*message.Field
 }
 
-func (span *Span) CalcScore(agg func(stats.Float64Data) (float64, error)) error {
+func (span *span) CalcScore(agg func(stats.Float64Data) (float64, error)) error {
 	span.trimValues()
 	if len(span.Values) == 1 {
 		span.Aggregation = span.Values[0]
@@ -34,7 +34,7 @@ func (span *Span) CalcScore(agg func(stats.Float64Data) (float64, error)) error 
 	return nil
 }
 
-func (span *Span) trimValues() {
+func (span *span) trimValues() {
 	// We want to keep zeroes if they occur between two non-zero values. Walk
 	// backward through the list.
 	trimmedVals := []float64{}
@@ -55,13 +55,13 @@ func (span *Span) trimValues() {
 	span.Values = trimmedVals
 }
 
-func (s Span) FillMessage(m *message.Message) error {
-	start, err := message.NewField("start", s.Start.Format(TimeFormat), "date-time")
+func (s span) FillMessage(m *message.Message) error {
+	start, err := message.NewField("start", s.Start.Format(timeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'start' field")
 	}
 
-	end, err := message.NewField("end", s.End.Format(TimeFormat), "date-time")
+	end, err := message.NewField("end", s.End.Format(timeFormat), "date-time")
 	if err != nil {
 		return errors.New("Could not create 'end' field")
 	}

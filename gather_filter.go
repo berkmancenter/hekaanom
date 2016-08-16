@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	DefaultAggregator = "Sum"
-	DefaultValueField = "normed"
-	AggFunctions      = map[string]func(stats.Float64Data) (float64, error){
+	defaultAggregator = "Sum"
+	defaultValueField = "normed"
+	aggFunctions      = map[string]func(stats.Float64Data) (float64, error){
 		"Sum":      stats.Sum,
 		"Mean":     stats.Mean,
 		"Median":   stats.Median,
@@ -23,12 +23,12 @@ var (
 	}
 )
 
-type Gatherer interface {
+type gatherer interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan Ruling) chan Span
-	FlushExpiredSpans(now time.Time, out chan Span)
-	FlushStuckSpans(out chan Span)
+	Connect(in chan ruling) chan span
+	FlushExpiredSpans(now time.Time, out chan span)
+	FlushStuckSpans(out chan span)
 	PrintSpansInMem()
 }
 
@@ -55,7 +55,7 @@ type GatherConfig struct {
 	LastDate string `toml:"last_date"`
 }
 
-type GatherFilter struct {
+type gatherFilter struct {
 	*GatherConfig
 	aggregator func(stats.Float64Data) (float64, error)
 	spanCache  spanCache
@@ -64,19 +64,19 @@ type GatherFilter struct {
 
 type spanCache struct {
 	sync.Mutex
-	spans map[string]*Span
+	spans map[string]*span
 	nows  map[string]time.Time
 }
 
-func (f *GatherFilter) ConfigStruct() interface{} {
+func (f *gatherFilter) ConfigStruct() interface{} {
 	return &GatherConfig{
 		Disabled:   false,
-		Statistic:  DefaultAggregator,
-		ValueField: DefaultValueField,
+		Statistic:  defaultAggregator,
+		ValueField: defaultValueField,
 	}
 }
 
-func (f *GatherFilter) Init(config interface{}) error {
+func (f *gatherFilter) Init(config interface{}) error {
 	f.GatherConfig = config.(*GatherConfig)
 
 	if f.GatherConfig.Disabled {
@@ -100,12 +100,12 @@ func (f *GatherFilter) Init(config interface{}) error {
 	}
 
 	f.aggregator = f.getAggregator()
-	f.spanCache = spanCache{spans: map[string]*Span{}, nows: map[string]time.Time{}}
+	f.spanCache = spanCache{spans: map[string]*span{}, nows: map[string]time.Time{}}
 	return nil
 }
 
-func (f *GatherFilter) Connect(in chan Ruling) chan Span {
-	out := make(chan Span)
+func (f *gatherFilter) Connect(in chan ruling) chan span {
+	out := make(chan span)
 
 	// There are four things that can be happening here:
 	//     We can have an active span and get non-anomalous, in which case we expire it or add it to the span.
@@ -134,46 +134,46 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 			}
 
 			// Does a span already exist for the current series?
-			span, ok := f.spanCache.spans[thisSeries]
+			s, ok := f.spanCache.spans[thisSeries]
 			if ok {
 				if ruling.Anomalous {
 					// Does this anomaly have the same sign as the current span? If so,
 					// add it to this span and extend the span's lifespan.
-					if span.Values[0] >= 0 && value >= 0 || span.Values[0] < 0 && value < 0 {
-						span.Values = append(span.Values, value)
-						span.End = now
+					if s.Values[0] >= 0 && value >= 0 || s.Values[0] < 0 && value < 0 {
+						s.Values = append(s.Values, value)
+						s.End = now
 					} else {
 						// If they have different signs, flush that old one and make a new
 						// span.
-						f.FlushSpan(span, out)
-						span = &Span{
+						f.FlushSpan(s, out)
+						s = &span{
 							Series:      thisSeries,
 							Values:      []float64{value},
 							Start:       ruling.Window.Start,
 							End:         ruling.Window.End,
 							Passthrough: ruling.Window.Passthrough,
 						}
-						f.spanCache.spans[thisSeries] = span
+						f.spanCache.spans[thisSeries] = s
 					}
 				} else {
 					// This ruling is not anomalous. If this span is expired, flush it.
 					// If it's not, add this ruling but don't extend its lifespan.
-					if f.SpanExpired(span, now) {
-						f.FlushSpan(span, out)
+					if f.SpanExpired(s, now) {
+						f.FlushSpan(s, out)
 					} else {
-						span.Values = append(span.Values, value)
+						s.Values = append(s.Values, value)
 					}
 				}
 			} else if ruling.Anomalous {
 				// This ruling is anomalous, so start a new span.
-				span = &Span{
+				s = &span{
 					Series:      thisSeries,
 					Values:      []float64{value},
 					Start:       ruling.Window.Start,
 					End:         ruling.Window.End,
 					Passthrough: ruling.Window.Passthrough,
 				}
-				f.spanCache.spans[thisSeries] = span
+				f.spanCache.spans[thisSeries] = s
 			}
 
 			f.spanCache.Unlock()
@@ -182,7 +182,7 @@ func (f *GatherFilter) Connect(in chan Ruling) chan Span {
 	return out
 }
 
-func (f *GatherFilter) SpanExpired(span *Span, now time.Time) bool {
+func (f *gatherFilter) SpanExpired(span *span, now time.Time) bool {
 	// When will this span be too old?
 	willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
 
@@ -194,7 +194,7 @@ func (f *GatherFilter) SpanExpired(span *Span, now time.Time) bool {
 	return isExpired || outOfData
 }
 
-func (f *GatherFilter) FlushSpan(span *Span, out chan Span) {
+func (f *gatherFilter) FlushSpan(span *span, out chan span) {
 	// Only called from within a goroutine that already locks spanCache for
 	// writing, so we don't need to lock here.
 	f.flushSpan(span, out)
@@ -202,7 +202,7 @@ func (f *GatherFilter) FlushSpan(span *Span, out chan Span) {
 	delete(f.spanCache.nows, span.Series)
 }
 
-func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
+func (f *gatherFilter) FlushExpiredSpans(now time.Time, out chan span) {
 	f.spanCache.Lock()
 	for _, span := range f.spanCache.spans {
 		if f.SpanExpired(span, now) {
@@ -212,7 +212,7 @@ func (f *GatherFilter) FlushExpiredSpans(now time.Time, out chan Span) {
 	f.spanCache.Unlock()
 }
 
-func (f *GatherFilter) FlushStuckSpans(out chan Span) {
+func (f *gatherFilter) FlushStuckSpans(out chan span) {
 	f.spanCache.Lock()
 	for series, span := range f.spanCache.spans {
 		willExpireAt := span.End.Add(time.Duration(f.GatherConfig.SpanWidth) * time.Second)
@@ -226,7 +226,7 @@ func (f *GatherFilter) FlushStuckSpans(out chan Span) {
 	f.spanCache.Unlock()
 }
 
-func (f *GatherFilter) PrintSpansInMem() {
+func (f *gatherFilter) PrintSpansInMem() {
 	fmt.Println("Spans in mem")
 	f.spanCache.Lock()
 	for series, span := range f.spanCache.spans {
@@ -242,7 +242,7 @@ func (f *GatherFilter) PrintSpansInMem() {
 	f.spanCache.Unlock()
 }
 
-func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
+func (f *gatherFilter) flushSpan(span *span, out chan span) {
 	span.Duration = span.End.Sub(span.Start) // + (time.Duration(f.GatherConfig.SampleInterval) * time.Second)
 	err := span.CalcScore(f.aggregator)
 	if err != nil {
@@ -252,7 +252,7 @@ func (f *GatherFilter) flushSpan(span *Span, out chan Span) {
 	out <- *span
 }
 
-func (f *GatherFilter) getRulingValue(ruling Ruling) (float64, error) {
+func (f *gatherFilter) getRulingValue(ruling ruling) (float64, error) {
 	st := reflect.ValueOf(ruling)
 	value := reflect.Indirect(st).FieldByName(f.GatherConfig.ValueField)
 	if !value.IsValid() {
@@ -261,12 +261,12 @@ func (f *GatherFilter) getRulingValue(ruling Ruling) (float64, error) {
 	return value.Float(), nil
 }
 
-func (f *GatherFilter) getAggregator() func(stats.Float64Data) (float64, error) {
+func (f *gatherFilter) getAggregator() func(stats.Float64Data) (float64, error) {
 	if f.GatherConfig.Statistic == "" {
-		return AggFunctions[DefaultAggregator]
+		return aggFunctions[defaultAggregator]
 	}
-	if f, ok := AggFunctions[f.GatherConfig.Statistic]; ok {
+	if f, ok := aggFunctions[f.GatherConfig.Statistic]; ok {
 		return f
 	}
-	return AggFunctions[DefaultAggregator]
+	return aggFunctions[defaultAggregator]
 }

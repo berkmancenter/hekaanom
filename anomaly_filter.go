@@ -10,43 +10,64 @@ import (
 	"github.com/mozilla-services/heka/pipeline"
 )
 
-const TimeFormat = time.RFC3339Nano
+const timeFormat = time.RFC3339Nano
 
 var (
-	DefaultMessageVal    = 1.0
-	DefaultMessageSeries = "**all**"
+	defaultMessageVal    = 1.0
+	defaultMessageSeries = "**all**"
 )
 
 func init() {
 	pipeline.RegisterPlugin("AnomalyFilter",
 		func() interface{} {
 			return &AnomalyFilter{
-				windower: new(WindowFilter),
-				detector: new(DetectFilter),
-				gatherer: new(GatherFilter),
+				windower: new(windowFilter),
+				detector: new(detectFilter),
+				gatherer: new(gatherFilter),
 			}
 		})
 }
 
 type AnomalyConfig struct {
-	SeriesFields []string      `toml:"series_fields"`
-	ValueField   string        `toml:"value_field"`
-	Realtime     bool          `toml:"realtime"`
+	// A space-delimited list of fields that should be used to group metrics into
+	// time series. The series code will be the values of these fields joined by
+	// '||'.
+	SeriesFields []string `toml:"series_fields"`
+
+	// The name of the field in the incoming metric message that contains the
+	// value that should be used to create the time series.
+	ValueField string `toml:"value_field"`
+
+	// Is this filter running against realtime data? i.e. is data going to keep
+	// coming in forever?
+	Realtime bool `toml:"realtime"`
+
+	// The configuration for the filter which groups metrics together into
+	// regular time blocks. The value of each window is the sum of the
+	// constituent metric values.
 	WindowConfig *WindowConfig `toml:"window"`
+
+	// The configuration for the filter that detects anomalies in a time series
+	// made of windows.
 	DetectConfig *DetectConfig `toml:"detect"`
+
+	// The configuration for the filter that gathers roughly consecutive
+	// anomalies into anomalous spans of time, a.k.a. anomalous events.
 	GatherConfig *GatherConfig `toml:"gather"`
-	Debug        bool          `toml:"debug"`
+
+	// Output debugging information.
+	Debug bool `toml:"debug"`
 }
 
 type AnomalyFilter struct {
 	runner pipeline.FilterRunner
 	helper pipeline.PluginHelper
 	*AnomalyConfig
-	windower   Windower
-	detector   Detector
-	gatherer   Gatherer
-	metrics    chan Metric
-	spans      chan Span
+	windower   windower
+	detector   detector
+	gatherer   gatherer
+	metrics    chan metric
+	spans      chan span
 	processing bool
 }
 
@@ -79,7 +100,7 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelper) error {
 	f.runner = fr
 	f.helper = h
-	f.metrics = make(chan Metric)
+	f.metrics = make(chan metric)
 
 	windows := f.windower.Connect(f.metrics)
 	rulings := f.detector.Connect(windows)
@@ -131,7 +152,7 @@ func (f *AnomalyFilter) CleanUp() {
 	close(f.metrics)
 }
 
-func (f *AnomalyFilter) publishSpans(in chan Span) error {
+func (f *AnomalyFilter) publishSpans(in chan span) error {
 	go func() {
 		for span := range in {
 			newPack, err := f.helper.PipelinePack(0)
@@ -152,7 +173,7 @@ func (f *AnomalyFilter) publishSpans(in chan Span) error {
 	return nil
 }
 
-func (f *AnomalyFilter) publishRulings(in chan Ruling) error {
+func (f *AnomalyFilter) publishRulings(in chan ruling) error {
 	go func() {
 		for ruling := range in {
 			newPack, err := f.helper.PipelinePack(0)
@@ -173,8 +194,8 @@ func (f *AnomalyFilter) publishRulings(in chan Ruling) error {
 	return nil
 }
 
-func (f *AnomalyFilter) metricFromMessage(msg *message.Message) Metric {
-	return Metric{
+func (f *AnomalyFilter) metricFromMessage(msg *message.Message) metric {
+	return metric{
 		time.Unix(0, msg.GetTimestamp()),
 		f.getMessageSeries(msg),
 		f.getMessageValue(msg),
@@ -204,7 +225,7 @@ func (f *AnomalyFilter) getMessageSeries(msg *message.Message) string {
 
 	seriesStr := series.String()
 	if len(seriesStr) == 0 {
-		return DefaultMessageSeries
+		return defaultMessageSeries
 	}
 	return seriesStr
 }
@@ -220,10 +241,10 @@ func (f *AnomalyFilter) getMessagePassthrough(msg *message.Message) []*message.F
 	return fields
 }
 
-func broadcastSpan(in chan Span, numOut int) []chan Span {
-	out := make([]chan Span, numOut)
+func broadcastSpan(in chan span, numOut int) []chan span {
+	out := make([]chan span, numOut)
 	for i := 0; i < numOut; i++ {
-		out[i] = make(chan Span)
+		out[i] = make(chan span)
 	}
 	go func() {
 		defer func() {
@@ -240,10 +261,10 @@ func broadcastSpan(in chan Span, numOut int) []chan Span {
 	return out
 }
 
-func broadcastRuling(in chan Ruling, numOut int) []chan Ruling {
-	out := make([]chan Ruling, numOut)
+func broadcastRuling(in chan ruling, numOut int) []chan ruling {
+	out := make([]chan ruling, numOut)
 	for i := 0; i < numOut; i++ {
-		out[i] = make(chan Ruling)
+		out[i] = make(chan ruling)
 	}
 	go func() {
 		defer func() {
@@ -262,15 +283,15 @@ func broadcastRuling(in chan Ruling, numOut int) []chan Ruling {
 
 func (f *AnomalyFilter) getMessageValue(msg *message.Message) float64 {
 	if f.AnomalyConfig.ValueField == "" {
-		return DefaultMessageVal
+		return defaultMessageVal
 	}
 	value, ok := msg.GetFieldValue(f.AnomalyConfig.ValueField)
 	if !ok {
-		return DefaultMessageVal
+		return defaultMessageVal
 	}
 	floatVal, err := strconv.ParseFloat(value.(string), 64)
 	if err != nil {
-		return DefaultMessageVal
+		return defaultMessageVal
 	}
 	return floatVal
 }

@@ -10,16 +10,14 @@ import (
 	"github.com/mozilla-services/heka/pipeline"
 )
 
-var Algos = []string{"RPCA"}
+var algos = []string{"RPCA"}
 
-const (
-	DefaultAlgo = "RPCA"
-)
+const defaultAlgo = "RPCA"
 
-type Detector interface {
+type detector interface {
 	pipeline.HasConfigStruct
 	pipeline.Plugin
-	Connect(in chan Window) chan Ruling
+	Connect(in chan window) chan ruling
 	PrintQs()
 	QueuesEmpty() bool
 }
@@ -30,26 +28,26 @@ type DetectConfig struct {
 	DetectorConfig pipeline.PluginConfig `toml:"config"`
 }
 
-type DetectAlgo interface {
+type detectAlgo interface {
 	Init(config interface{}) error
-	Detect(win Window, out chan Ruling)
+	Detect(win window, out chan ruling)
 }
 
-type DetectFilter struct {
-	Detectors []DetectAlgo
+type detectFilter struct {
+	Detectors []detectAlgo
 	*DetectConfig
-	chans     []chan Window
+	chans     []chan window
 	seriesToI map[string]int
 }
 
-func (f *DetectFilter) ConfigStruct() interface{} {
+func (f *detectFilter) ConfigStruct() interface{} {
 	return &DetectConfig{
-		Algorithm: DefaultAlgo,
+		Algorithm: defaultAlgo,
 		MaxProcs:  runtime.GOMAXPROCS(0),
 	}
 }
 
-func (f *DetectFilter) Init(config interface{}) error {
+func (f *detectFilter) Init(config interface{}) error {
 	f.DetectConfig = config.(*DetectConfig)
 
 	if f.DetectConfig.Algorithm == "" {
@@ -58,23 +56,23 @@ func (f *DetectFilter) Init(config interface{}) error {
 	if !algoIsKnown(f.DetectConfig.Algorithm) {
 		return errors.New("Unknown algorithm.")
 	}
-	f.Detectors = make([]DetectAlgo, f.DetectConfig.MaxProcs)
+	f.Detectors = make([]detectAlgo, f.DetectConfig.MaxProcs)
 	switch f.DetectConfig.Algorithm {
 	case "RPCA":
 		for i := 0; i < f.DetectConfig.MaxProcs; i++ {
-			f.Detectors[i] = new(RPCADetector)
+			f.Detectors[i] = new(rPCADetector)
 			if err := f.Detectors[i].Init(f.DetectConfig.DetectorConfig); err != nil {
 				return err
 			}
 		}
 	}
 	f.seriesToI = make(map[string]int, f.DetectConfig.MaxProcs)
-	f.chans = make([]chan Window, f.DetectConfig.MaxProcs)
+	f.chans = make([]chan window, f.DetectConfig.MaxProcs)
 
 	return nil
 }
 
-func (f *DetectFilter) QueuesEmpty() bool {
+func (f *detectFilter) QueuesEmpty() bool {
 	for _, length := range f.QueueLengths() {
 		if length > 0 {
 			return false
@@ -83,7 +81,7 @@ func (f *DetectFilter) QueuesEmpty() bool {
 	return true
 }
 
-func (f *DetectFilter) QueueLengths() []int {
+func (f *detectFilter) QueueLengths() []int {
 	lengths := make([]int, len(f.chans))
 	for i, ch := range f.chans {
 		lengths[i] = len(ch)
@@ -91,19 +89,19 @@ func (f *DetectFilter) QueueLengths() []int {
 	return lengths
 }
 
-func (f *DetectFilter) PrintQs() {
+func (f *detectFilter) PrintQs() {
 	for i, length := range f.QueueLengths() {
 		fmt.Println(i, " - ", length)
 	}
 	fmt.Println()
 }
 
-func (f *DetectFilter) Connect(in chan Window) chan Ruling {
+func (f *detectFilter) Connect(in chan window) chan ruling {
 	var wg sync.WaitGroup
-	out := make(chan Ruling)
+	out := make(chan ruling)
 	wg.Add(f.DetectConfig.MaxProcs)
 
-	detect := func(detector DetectAlgo, in chan Window, out chan Ruling) {
+	detect := func(detector detectAlgo, in chan window, out chan ruling) {
 		for window := range in {
 			detector.Detect(window, out)
 		}
@@ -111,7 +109,7 @@ func (f *DetectFilter) Connect(in chan Window) chan Ruling {
 	}
 
 	for i := 0; i < f.DetectConfig.MaxProcs; i++ {
-		f.chans[i] = make(chan Window, 10000)
+		f.chans[i] = make(chan window, 10000)
 		go detect(f.Detectors[i], f.chans[i], out)
 	}
 
@@ -141,7 +139,7 @@ func iFromHash(series string, maxI int) int {
 	return sum % (maxI + 1)
 }
 
-func (f *DetectFilter) seriesIndex(series string, maxI int) int {
+func (f *detectFilter) seriesIndex(series string, maxI int) int {
 	i := iFromHash(series, maxI)
 	min := 10000
 	for j, ch := range f.chans {
@@ -154,7 +152,7 @@ func (f *DetectFilter) seriesIndex(series string, maxI int) int {
 }
 
 func algoIsKnown(algo string) bool {
-	for _, v := range Algos {
+	for _, v := range algos {
 		if v == algo {
 			return true
 		}

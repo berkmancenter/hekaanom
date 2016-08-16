@@ -2,15 +2,15 @@ package hekaanom
 
 import "github.com/mozilla-services/heka/message"
 
-type Ruling struct {
-	Window        Window
+type ruling struct {
+	Window        window
 	Anomalous     bool
 	Anomalousness float64
 	Normed        float64
 	Passthrough   []*message.Field
 }
 
-func (r Ruling) FillMessage(m *message.Message) error {
+func (r ruling) FillMessage(m *message.Message) error {
 	r.Window.FillMessage(m)
 
 	anomalous, err := message.NewField("anomalous", r.Anomalous, "")
