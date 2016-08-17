@@ -15,7 +15,7 @@ type window struct {
 	Passthrough []*message.Field
 }
 
-func WindowFromMessage(m *message.Message) (window, error) {
+func windowFromMessage(m *message.Message) (window, error) {
 	start, ok := m.GetFieldValue("window_start")
 	if !ok {
 		return window{}, errors.New("Message does not contain 'window_start' field")

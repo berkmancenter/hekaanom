@@ -14,6 +14,7 @@ type windower interface {
 }
 
 type WindowConfig struct {
+	// The number of seconds that constitute a single window.
 	WindowWidth int64 `toml:"window_width"`
 }
 

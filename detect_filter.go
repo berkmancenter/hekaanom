@@ -23,9 +23,13 @@ type detector interface {
 }
 
 type DetectConfig struct {
-	Algorithm      string                `toml:"algorithm"`
-	MaxProcs       int                   `toml:"max_procs"`
+	// The algorithm that should be used to detect anomalies. Right now, the only
+	// option is "RPCA".
+	Algorithm string `toml:"algorithm"`
+
+	// The configuration for the selected anomaly detection algorithm.
 	DetectorConfig pipeline.PluginConfig `toml:"config"`
+	maxProcs       int                   `toml:"max_procs"`
 }
 
 type detectAlgo interface {
@@ -43,7 +47,7 @@ type detectFilter struct {
 func (f *detectFilter) ConfigStruct() interface{} {
 	return &DetectConfig{
 		Algorithm: defaultAlgo,
-		MaxProcs:  runtime.GOMAXPROCS(0),
+		maxProcs:  runtime.GOMAXPROCS(0),
 	}
 }
 
@@ -56,18 +60,18 @@ func (f *detectFilter) Init(config interface{}) error {
 	if !algoIsKnown(f.DetectConfig.Algorithm) {
 		return errors.New("Unknown algorithm.")
 	}
-	f.Detectors = make([]detectAlgo, f.DetectConfig.MaxProcs)
+	f.Detectors = make([]detectAlgo, f.DetectConfig.maxProcs)
 	switch f.DetectConfig.Algorithm {
 	case "RPCA":
-		for i := 0; i < f.DetectConfig.MaxProcs; i++ {
+		for i := 0; i < f.DetectConfig.maxProcs; i++ {
 			f.Detectors[i] = new(rPCADetector)
 			if err := f.Detectors[i].Init(f.DetectConfig.DetectorConfig); err != nil {
 				return err
 			}
 		}
 	}
-	f.seriesToI = make(map[string]int, f.DetectConfig.MaxProcs)
-	f.chans = make([]chan window, f.DetectConfig.MaxProcs)
+	f.seriesToI = make(map[string]int, f.DetectConfig.maxProcs)
+	f.chans = make([]chan window, f.DetectConfig.maxProcs)
 
 	return nil
 }
@@ -99,7 +103,7 @@ func (f *detectFilter) PrintQs() {
 func (f *detectFilter) Connect(in chan window) chan ruling {
 	var wg sync.WaitGroup
 	out := make(chan ruling)
-	wg.Add(f.DetectConfig.MaxProcs)
+	wg.Add(f.DetectConfig.maxProcs)
 
 	detect := func(detector detectAlgo, in chan window, out chan ruling) {
 		for window := range in {
@@ -108,7 +112,7 @@ func (f *detectFilter) Connect(in chan window) chan ruling {
 		wg.Done()
 	}
 
-	for i := 0; i < f.DetectConfig.MaxProcs; i++ {
+	for i := 0; i < f.DetectConfig.maxProcs; i++ {
 		f.chans[i] = make(chan window, 10000)
 		go detect(f.Detectors[i], f.chans[i], out)
 	}
@@ -118,7 +122,7 @@ func (f *detectFilter) Connect(in chan window) chan ruling {
 		for window := range in {
 			i, ok := f.seriesToI[window.Series]
 			if !ok {
-				i = f.seriesIndex(window.Series, f.DetectConfig.MaxProcs-1)
+				i = f.seriesIndex(window.Series, f.DetectConfig.maxProcs-1)
 				f.seriesToI[window.Series] = i
 			}
 			f.chans[i] <- window

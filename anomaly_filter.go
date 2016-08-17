@@ -30,11 +30,12 @@ func init() {
 
 type AnomalyConfig struct {
 	// A space-delimited list of fields that should be used to group metrics into
-	// time series. The series code will be the values of these fields joined by
-	// '||'.
+	// time series. The series code in messages will be the values of these
+	// fields joined by '||'. A single field is fine, but should still be given
+	// as an array.
 	SeriesFields []string `toml:"series_fields"`
 
-	// The name of the field in the incoming metric message that contains the
+	// The name of the field in the incoming message that contains the numeric
 	// value that should be used to create the time series.
 	ValueField string `toml:"value_field"`
 
@@ -71,6 +72,7 @@ type AnomalyFilter struct {
 	processing bool
 }
 
+// ConfigStruct implements Heka's HasConfigStruct interface.
 func (f *AnomalyFilter) ConfigStruct() interface{} {
 	return &AnomalyConfig{
 		WindowConfig: f.windower.ConfigStruct().(*WindowConfig),
@@ -80,6 +82,7 @@ func (f *AnomalyFilter) ConfigStruct() interface{} {
 	}
 }
 
+// Init implements Heka's Plugin interface.
 func (f *AnomalyFilter) Init(config interface{}) error {
 	f.AnomalyConfig = config.(*AnomalyConfig)
 	f.processing = false
@@ -97,6 +100,7 @@ func (f *AnomalyFilter) Init(config interface{}) error {
 	return nil
 }
 
+// Prepare implements Heka's Filter interface.
 func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelper) error {
 	f.runner = fr
 	f.helper = h
@@ -117,6 +121,7 @@ func (f *AnomalyFilter) Prepare(fr pipeline.FilterRunner, h pipeline.PluginHelpe
 	return nil
 }
 
+// ProcessMessage implements Heka's MessageProcessor interface.
 func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	metric := f.metricFromMessage(pack.Message)
 	f.metrics <- metric
@@ -128,6 +133,7 @@ func (f *AnomalyFilter) ProcessMessage(pack *pipeline.PipelinePack) error {
 	return nil
 }
 
+// TimerEvent implements Heka's TicketPlugin interface.
 func (f *AnomalyFilter) TimerEvent() error {
 	if f.AnomalyConfig.Debug {
 		f.detector.PrintQs()
@@ -148,6 +154,7 @@ func (f *AnomalyFilter) TimerEvent() error {
 	return nil
 }
 
+// CleanUp implements Heka's Filter interface.
 func (f *AnomalyFilter) CleanUp() {
 	close(f.metrics)
 }
