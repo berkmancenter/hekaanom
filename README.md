@@ -5,7 +5,7 @@ hekaanom
 
 hekaanom is a Go library implementing anomaly detection in time series data as a filter plugin for the [Heka data processing tool](https://hekad.readthedocs.org).
 
-*Note:* Mozilla [has stated](https://mail.mozilla.org/pipermail/heka/2016-May/001059.html) that they intend to stop maintaining Heka. This filter will continue being a useful first pass to look for anomalies in data, but it should not be used as a long-term production tool.
+**Note:** Mozilla [has stated](https://mail.mozilla.org/pipermail/heka/2016-May/001059.html) that they intend to stop maintaining Heka. This filter will continue being a useful first pass to look for anomalies in data, but it should not be used as a long-term production tool.
 
 ### Getting started
 
