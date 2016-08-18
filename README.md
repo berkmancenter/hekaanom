@@ -3,13 +3,24 @@ hekaanom
 
 [![GoDoc](https://godoc.org/github.com/berkmancenter/hekaanom?status.png)](https://godoc.org/github.com/berkmancenter/hekaanom)
 
+**Note:** Mozilla [has stated](https://mail.mozilla.org/pipermail/heka/2016-May/001059.html) that they intend to stop maintaining Heka. This filter will continue being a useful first pass to look for anomalies in data, but it should not be used as a long-term production tool.
+
 hekaanom is a Go library implementing anomaly detection in time series data as a filter plugin for the [Heka data processing tool](https://hekad.readthedocs.org).
 
-**Note:** Mozilla [has stated](https://mail.mozilla.org/pipermail/heka/2016-May/001059.html) that they intend to stop maintaining Heka. This filter will continue being a useful first pass to look for anomalies in data, but it should not be used as a long-term production tool.
+More documentation is available via [godoc](https://godoc.org/github.com/berkmancenter/hekaanom).
 
 ### Getting started
 
-API documentation is available via [godoc](https://godoc.org/github.com/berkmancenter/hekaanom).
+To get Heka running with this filter installed, you'll have to build Heka yourself. But it's pretty easy. We'll assume a Unix-y environment here, but Windows will work too (look at [Heka's docs](http://hekad.readthedocs.io/en/v0.10.0/installing.html) for Windows instructions).
+
+1. First, install the [prerequesites](http://hekad.readthedocs.io/en/v0.10.0/installing.html#from-source) for Heka
+2. Check out the Heka repository: `git clone https://github.com/mozilla-services/heka`
+3. Tell Heka to include the hekaanom filter: `echo 'add_external_plugin(git https://github.com/berkmancenter/hekaanom v1.0.0)' >> heka/cmake/plugin_loader.cmake`
+4. Build heka: `cd heka; source build.sh`
+5. Write a [config file](http://hekad.readthedocs.io/en/v0.10.0/config/index.html) that sets up data inputs, outputs, and configures this filter
+6. Run heka: `build/heka/bin/hekad -config {config file}`
+
+More documentation on the build process is available in [Heka's docs](http://hekad.readthedocs.io/en/v0.10.0/installing.html).
 
 ### License
 
