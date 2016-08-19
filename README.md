@@ -22,6 +22,39 @@ To get Heka running with this filter installed, you'll have to build Heka yourse
 
 More documentation on the build process is available in [Heka's docs](http://hekad.readthedocs.io/en/v0.10.0/installing.html).
 
+### Example Configuration
+
+The full list of configurable options is available in the [godoc documentation](https://godoc.org/github.com/berkmancenter/hekaanom#AnomalyConfig), but here is an example config section to start from when building your Heka config file:
+
+```toml
+[anom_filter]
+type = "AnomalyFilter"
+message_matcher = "Type == 'my.metric' && Fields[rate] == 'daily'"
+value_field = "views"
+series_fields = ["page", "country"]
+ticker_interval = 5 # seconds
+realtime = false
+
+  [anom_filter.window]
+  window_width = 86400 # seconds = 1 day
+
+  [anom_filter.detect]
+  algorithm = "RPCA"
+
+    [anom_filter.detect.config]
+    major_frequency = 7 # days = 1 week
+    minor_frequency = 56 # days = 8 weeks
+    autodiff = false
+
+  [anom_filter.gather]
+  span_width = 345600 # seconds = 4 days
+  last_date = "yesterday"
+  statistic = "Mean"
+  value_field = "Normed"
+```
+
+The indentation isn't necessary, but helps illustrate the conceptual nesting of the configuration.
+
 ### License
 
 Copyright 2016 President and Fellows of Harvard College
